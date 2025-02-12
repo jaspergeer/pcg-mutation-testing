@@ -1,4 +1,5 @@
 [toolchain]
-channel = "nightly-2024-09-07"
-components = [ "rustc-dev", "llvm-tools-preview", "rust-std", "rustfmt", "clippy" ]
-profile = "minimal"
+channel = "pcg-stage2"
+# channel = "nightly-2024-09-15"
+# components = [ "rustc-dev", "llvm-tools-preview", "rust-std", "rustfmt", "clippy" ] 
+# profile = "minimal"
