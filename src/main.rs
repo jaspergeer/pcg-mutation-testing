@@ -10,21 +10,27 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use pcg_evaluation::rustc_interface::borrowck;
+use pcg_evaluation::rustc_interface::borrowck::consumers;
+
 use pcg_evaluation::rustc_interface::data_structures::fx::FxHashMap;
+
 use pcg_evaluation::rustc_interface::errors::registry;
+
 use pcg_evaluation::rustc_interface::middle::mir;
 use pcg_evaluation::rustc_interface::middle::mir::Promoted;
 use pcg_evaluation::rustc_interface::middle::query::queries::mir_built;
 use pcg_evaluation::rustc_interface::middle::ty;
 use pcg_evaluation::rustc_interface::middle::util;
+
 use pcg_evaluation::rustc_interface::session;
 use pcg_evaluation::rustc_interface::session::config;
 use pcg_evaluation::rustc_interface::session::Session;
+
 use pcg_evaluation::rustc_interface::index::IndexVec;
+
 use pcg_evaluation::rustc_interface::middle::query::queries::mir_borrowck::ProvidedValue;
 
 use pcg_evaluation::rustc_interface::{
-    borrowck::consumers,
     driver::{self, args, Compilation},
     errors,
     hir::{self, def_id::LocalDefId},
@@ -41,35 +47,25 @@ use pcg_evaluation::rustc_interface::{
 };
 use pcs::{combined_pcs::BodyWithBorrowckFacts, run_combined_pcs, FpcsOutput};
 
-thread_local! {
-    pub static BODIES:
-        RefCell<FxHashMap<LocalDefId, BodyWithBorrowckFacts<'static>>> =
-        RefCell::new(FxHashMap::default());
-
-    pub static PROMOTED:
-        RefCell<FxHashMap<LocalDefId, (Body<'static>, IndexVec<Promoted, Body<'static>>)>> =
-        RefCell::new(FxHashMap::default());
-
-    pub static ANALYSES:
-        RefCell<FxHashMap<LocalDefId, FpcsOutput<'static, 'static>>> =
-        RefCell::new(FxHashMap::default());
-}
-
 trait Mutator {
-    fn next_mutant<'mir, 'tcx>(&mut self, analysis: &FpcsOutput<'mir, 'tcx>, to_mutate: Body<'tcx>) -> Option<Body<'tcx>>;
+    // the only kind of mutation that `next_mutant` should perform on `analysis` is to move the cursor
+    fn next_mutant<'mir, 'tcx>(&mut self, analysis: &mut FpcsOutput<'mir, 'tcx>, to_mutate: Body<'tcx>) -> Option<Body<'tcx>>;
 }
 
-struct TestMutator;
+struct TestMutator {
+    ct: i64
+}
 
 impl TestMutator {
-    fn construct() -> Box<dyn Mutator> {
-        Box::new(TestMutator)
+    fn make() -> Box<dyn Mutator> {
+        Box::new(TestMutator { ct: 0 })
     }
 }
 
 impl Mutator for TestMutator {
-    fn next_mutant<'mir, 'tcx>(&mut self, _analysis: &FpcsOutput<'mir, 'tcx>, mut body: Body<'tcx>) -> Option<Body<'tcx>> {
+    fn next_mutant<'mir, 'tcx>(&mut self, analysis: &mut FpcsOutput<'mir, 'tcx>, mut body: Body<'tcx>) -> Option<Body<'tcx>> {
         for block in body.basic_blocks_mut() {
+            if (self.ct == 3) { return None; }
             let mut insertions = HashMap::new();
             for (i, statement) in block.statements.iter().enumerate() {
                 if let mir::StatementKind::Assign(assign_box) = statement.kind.clone() {
@@ -98,11 +94,39 @@ impl Mutator for TestMutator {
             }
         }
         eprintln!("RUN MUTATOR");
+        self.ct += 1;
         Some(body)
     }
 }
 
-fn run_pcs_on_all_fns<'tcx>(tcx: TyCtxt<'tcx>) {
+struct MutablyLentDetector {
+
+}
+
+impl MutablyLentDetector {
+    fn make() -> Box<dyn Mutator> {
+       Box::new(MutablyLentDetector {})
+    }
+}
+
+impl Mutator for MutablyLentDetector {
+    fn next_mutant<'mir, 'tcx>(&mut self, analysis: &mut FpcsOutput<'mir, 'tcx>, mut body: Body<'tcx>) -> Option<Body<'tcx>> {
+        let mut ct = 0;
+        println!("before loop");
+        for bb_index in body.basic_blocks_mut().indices() {
+            println!("index: {:?}", bb_index);
+            println!("analysis body: {:?}", analysis.body());
+            let fpcs_bb = analysis.get_all_for_bb(bb_index);
+            for statement in fpcs_bb.statements {
+                let after_summary = statement.states.post_main();
+                eprintln!("{:?}", after_summary);
+            }
+        }
+        None
+    }
+}
+
+fn run_pcs_on_all_fns<'mir, 'tcx>(body_map: &'mir HashMap<LocalDefId, BodyWithBorrowckFacts<'tcx>>, tcx: TyCtxt<'tcx>) -> HashMap<LocalDefId, FpcsOutput<'mir, 'tcx>> {
     let mut item_names = vec![];
 
     let vis_dir = if std::env::var("PCS_VISUALIZATION").unwrap_or_default() == "true" {
@@ -119,15 +143,14 @@ fn run_pcs_on_all_fns<'tcx>(tcx: TyCtxt<'tcx>) {
         std::fs::create_dir_all(path).expect("Failed to create visualization directory");
     }
 
+    let mut analysis_map = HashMap::new();
+
     for def_id in tcx.hir().body_owners() {
         let kind = tcx.def_kind(def_id);
         match kind {
             hir::def::DefKind::Fn | hir::def::DefKind::AssocFn => {
                 let item_name = format!("{}", tcx.def_path_str(def_id.to_def_id()));
-                let body: BodyWithBorrowckFacts<'_> = BODIES.with(|state| {
-                    let mut map = state.borrow_mut();
-                    unsafe { std::mem::transmute(map.remove(&def_id).unwrap()) }
-                });
+                let body = body_map.get(&def_id).unwrap();
 
                 let safety = tcx.fn_sig(def_id).skip_binder().safety();
                 if safety == hir::Safety::Unsafe {
@@ -140,15 +163,12 @@ fn run_pcs_on_all_fns<'tcx>(tcx: TyCtxt<'tcx>) {
                     tcx,
                     vis_dir.map(|dir| format!("{}/{}", dir, item_name)),
                 );
-                ANALYSES.with(|state| {
-                    let mut map = state.borrow_mut();
-                    unsafe {
-                        assert!(map.insert(def_id, std::mem::transmute(analysis)).is_none());
-                    }
-                });
+
+                analysis_map.insert(def_id, analysis);
+
                 println!(
                     "num analyses: {}",
-                    ANALYSES.with(|state| state.borrow_mut().len())
+                    analysis_map.len()
                 );
                 item_names.push(item_name);
             }
@@ -172,34 +192,17 @@ fn run_pcs_on_all_fns<'tcx>(tcx: TyCtxt<'tcx>) {
         file.write_all(json_data.as_bytes())
             .expect("Failed to write item names to JSON file");
     }
-}
-
-fn mir_borrowck<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> ProvidedValue<'tcx> {
-    let consumer_opts = consumers::ConsumerOptions::PoloniusOutputFacts;
-    let body_with_facts = consumers::get_body_with_borrowck_facts(tcx, def_id, consumer_opts);
-    unsafe {
-        let body: BodyWithBorrowckFacts<'tcx> = body_with_facts.into();
-        let body: BodyWithBorrowckFacts<'static> = std::mem::transmute(body);
-        BODIES.with(|state| {
-            let mut map = state.borrow_mut();
-            assert!(map.insert(def_id, body).is_none());
-        });
-    }
-    let mut providers = Providers::default();
-    borrowck::provide(&mut providers);
-    let original_mir_borrowck = providers.mir_borrowck;
-    original_mir_borrowck(tcx, def_id)
-}
-
-fn set_mir_borrowck(_session: &Session, providers: &mut Providers) {
-    providers.mir_borrowck = mir_borrowck;
+    return analysis_map;
 }
 
 fn run_tests(input_file: &String, make_mutators: Vec<fn() -> Box<dyn Mutator>>) {
     let config = interface::Config {
         // Command line options
         opts: config::Options {
-            incremental: None,
+            unstable_opts: config::UnstableOptions {
+                polonius: config::Polonius::Next,
+                .. config::UnstableOptions::default()
+            },
             .. config::Options::default()
         },
         crate_cfg: Vec::new(),       // FxHashSet<(String, Option<String>)>
@@ -212,7 +215,7 @@ fn run_tests(input_file: &String, make_mutators: Vec<fn() -> Box<dyn Mutator>>) 
         lint_caps: FxHashMap::default(), // FxHashMap<lint::LintId, lint::Level>
         psess_created: None, //Option<Box<dyn FnOnce(&mut ParseSess) + Send>>
         register_lints: None, // Option<Box<dyn Fn(&Session, &mut LintStore) + Send + Sync>>
-        override_queries: Some(set_mir_borrowck),
+        override_queries: None,
         registry: registry::Registry::new(errors::codes::DIAGNOSTICS),
         make_codegen_backend: None,
         expanded_args: Vec::new(),
@@ -224,49 +227,32 @@ fn run_tests(input_file: &String, make_mutators: Vec<fn() -> Box<dyn Mutator>>) 
         compiler.enter(|queries| {
             queries.global_ctxt().unwrap().enter(|tcx| {
                 let hir_krate = tcx.hir();
+                let mut promoted_map = HashMap::new();
+                let mut body_map = HashMap::new();
+
                 for def_id in hir_krate.body_owners() {
                     let (body_steal, promoted_steal) = tcx.mir_promoted(def_id);
-                    unsafe {
-                        let body: Body<'_> = std::mem::transmute(body_steal.borrow().clone());
-                        let promoted: IndexVec<Promoted, Body<'_>> = std::mem::transmute(promoted_steal.borrow().clone());
-                        PROMOTED.with(|state| {
-                            let mut map = state.borrow_mut();
-                            map.insert(def_id, (body, promoted));
-                        });
-                    }
+                    let body = body_steal.borrow().clone();
+                    let promoted = promoted_steal.borrow().clone();
+                    promoted_map.insert(def_id, (body, promoted));
+
+                    let consumer_opts = consumers::ConsumerOptions::PoloniusOutputFacts;
+                    let body_with_facts = consumers::get_body_with_borrowck_facts(tcx, def_id, consumer_opts);
+                    body_map.insert(def_id, body_with_facts.into());
                 }
 
                 tcx.analysis(());
-                run_pcs_on_all_fns(tcx);
-
-                for make_mutator in &make_mutators {
-                    let promoted_map: FxHashMap<LocalDefId, (Body<'_>, IndexVec<Promoted, Body<'_>>)> = PROMOTED.with(|state| unsafe { std::mem::transmute(state.borrow().clone()) });
-                    for (def_id, (body, promoted)) in promoted_map {
-                        let mut body_clone = body.clone();
-                        let (_, _) = borrowck::do_mir_borrowck(tcx.clone(), &mut body_clone, &promoted, None);
-                    }
-                }
+                let mut analysis_map = run_pcs_on_all_fns(&body_map, tcx);
 
                 // mutations
                 for make_mutator in &make_mutators {
-                    let promoted_map: FxHashMap<LocalDefId, (Body<'_>, IndexVec<Promoted, Body<'_>>)> = PROMOTED.with(|state| unsafe { std::mem::transmute(state.borrow().clone()) });
-                    for (def_id, (mut body, promoted)) in promoted_map {
+                    for (def_id, (body, promoted)) in promoted_map.iter() {
                         let mut curr_mutator = make_mutator();
-                        eprintln!("before {:?}: {:?}", def_id, body);
-                        ANALYSES.with(|state| {
-                            let analyses_map = state.borrow();
-                            unsafe {
-                                let analysis: &FpcsOutput<'_, '_> = std::mem::transmute(analyses_map.get(&def_id).unwrap());
-                                match curr_mutator.next_mutant(analysis, body) {
-                                    Some(next_mutant) => {
-                                        println!("after {:?}: {:?}", def_id, next_mutant);
-                                        println!();
-                                        let (borrowck_result, _) = borrowck::do_mir_borrowck(tcx, &next_mutant, &promoted, None);
-                                    }
-                                    _ => ()
-                                }
-                            }
-                        });
+                        let analysis  = analysis_map.get_mut(&def_id).unwrap();
+                        while let Some(next_mutant) = curr_mutator.next_mutant(analysis, body.clone()) {
+                            let (borrowck_result, _) = borrowck::do_mir_borrowck(tcx, &next_mutant, &promoted, None);
+                            // TODO do something with borrowck_result
+                        }
                     }
                 }
                 // TODO rustc might have some stateful mechanism for limiting the number of errors shown and not showing the same error twice
@@ -279,23 +265,5 @@ fn main() {
     let args: Vec<_> = std::env::args().collect();
     let mut input_file = args.get(1).unwrap();
     println!("{:?}", *input_file);
-    run_tests(input_file, vec![TestMutator::construct]);
-    // let mut rustc_args = Vec::new();
-    // if !std::env::args().any(|arg| arg.starts_with("--edition=")) {
-    //     rustc_args.push("--edition=2018".to_string());
-    // }
-    // rustc_args.push("-Zpolonius=next".to_string());
-    // rustc_args.extend(std::env::args().skip(1));
-
-    // eprintln!("Generate PCGs");
-    // driver::RunCompiler::new(
-    //     &rustc_args,
-    //     &mut PcgCallbacks {
-    //         mutator_make_mutators: vec![|| Box::new(TestMutator)],
-    //     },
-    // )
-    // .run()
-    // .unwrap();
-
-    // interface::run_compiler();
+    run_tests(input_file, vec![MutablyLentDetector::make]);
 }
