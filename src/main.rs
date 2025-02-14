@@ -45,27 +45,30 @@ use pcg_evaluation::rustc_interface::{
         EarlyDiagCtxt,
     },
 };
-use pcs::{combined_pcs::BodyWithBorrowckFacts, run_combined_pcs, FpcsOutput};
+use pcs::combined_pcs::BodyWithBorrowckFacts;
+use pcs::run_combined_pcs;
+use pcs::free_pcs::FreePcsLocation;
+use pcs::free_pcs::FreePcsBasicBlock;
+use pcs::FpcsOutput;
+use pcs::borrows::borrows_graph::BorrowsGraph;
+
+use rand::rng;
+use rand::Rng;
+
+
+// TODO have a cursor that iterates over statements/basic block?, call generate_mutants with each of these
 
 trait Mutator {
-    // the only kind of mutation that `next_mutant` should perform on `analysis` is to move the cursor
-    fn next_mutant<'mir, 'tcx>(&mut self, analysis: &mut FpcsOutput<'mir, 'tcx>, to_mutate: Body<'tcx>) -> Option<Body<'tcx>>;
+    fn generate_mutants<'tcx>(&mut self, fpcs_bb: &FreePcsBasicBlock<'tcx>, body: &Body<'tcx>) -> Vec<Body<'tcx>>;
+    fn run_ratio(&mut self) -> (u32, u32);
 }
 
-struct TestMutator {
-    ct: i64
-}
-
-impl TestMutator {
-    fn make() -> Box<dyn Mutator> {
-        Box::new(TestMutator { ct: 0 })
-    }
-}
+struct TestMutator;
 
 impl Mutator for TestMutator {
-    fn next_mutant<'mir, 'tcx>(&mut self, analysis: &mut FpcsOutput<'mir, 'tcx>, mut body: Body<'tcx>) -> Option<Body<'tcx>> {
+    fn generate_mutants<'tcx>(&mut self, fpcs_bb: &FreePcsBasicBlock<'tcx>, body: &Body<'tcx>) -> Vec<Body<'tcx>> {
+        let mut body = body.clone();
         for block in body.basic_blocks_mut() {
-            if (self.ct == 3) { return None; }
             let mut insertions = HashMap::new();
             for (i, statement) in block.statements.iter().enumerate() {
                 if let mir::StatementKind::Assign(assign_box) = statement.kind.clone() {
@@ -94,36 +97,26 @@ impl Mutator for TestMutator {
             }
         }
         eprintln!("RUN MUTATOR");
-        self.ct += 1;
-        Some(body)
+        vec![body]
     }
+
+    fn run_ratio(&mut self) -> (u32, u32) { (1, 1) }
 }
 
-struct MutablyLentDetector {
-
-}
-
-impl MutablyLentDetector {
-    fn make() -> Box<dyn Mutator> {
-       Box::new(MutablyLentDetector {})
-    }
-}
+struct MutablyLentDetector;
 
 impl Mutator for MutablyLentDetector {
-    fn next_mutant<'mir, 'tcx>(&mut self, analysis: &mut FpcsOutput<'mir, 'tcx>, mut body: Body<'tcx>) -> Option<Body<'tcx>> {
-        let mut ct = 0;
-        println!("before loop");
-        for bb_index in body.basic_blocks_mut().indices() {
-            println!("index: {:?}", bb_index);
-            println!("analysis body: {:?}", analysis.body());
-            let fpcs_bb = analysis.get_all_for_bb(bb_index);
-            for statement in fpcs_bb.statements {
-                let after_summary = statement.states.post_main();
-                eprintln!("{:?}", after_summary);
-            }
-        }
-        None
+    fn generate_mutants<'tcx>(&mut self, fpcs_bb: &FreePcsBasicBlock<'tcx>, body: &Body<'tcx>) -> Vec<Body<'tcx>> {
+        fpcs_bb.statements.iter().flat_map(|statement| {
+            vec![]
+        }).collect()
+        // fn count_pattern_instances<'tcx>(borrows_graph: &BorrowsGraph<'tcx>) -> i64 {
+        //     // let mutable_leaf_nodes =
+        //     // backwards BFS from mutable leaves?
+        // }
     }
+
+    fn run_ratio(&mut self) -> (u32, u32) { (1, 1) }
 }
 
 fn run_pcs_on_all_fns<'mir, 'tcx>(body_map: &'mir HashMap<LocalDefId, BodyWithBorrowckFacts<'tcx>>, tcx: TyCtxt<'tcx>) -> HashMap<LocalDefId, FpcsOutput<'mir, 'tcx>> {
@@ -192,10 +185,10 @@ fn run_pcs_on_all_fns<'mir, 'tcx>(body_map: &'mir HashMap<LocalDefId, BodyWithBo
         file.write_all(json_data.as_bytes())
             .expect("Failed to write item names to JSON file");
     }
-    return analysis_map;
+    analysis_map
 }
 
-fn run_tests(input_file: &String, make_mutators: Vec<fn() -> Box<dyn Mutator>>) {
+fn run_tests(input_file: &String, mut mutators: Vec<&mut (dyn Mutator + Send)>) {
     let config = interface::Config {
         // Command line options
         opts: config::Options {
@@ -223,38 +216,43 @@ fn run_tests(input_file: &String, make_mutators: Vec<fn() -> Box<dyn Mutator>>) 
         hash_untracked_state: None,
         using_internal_features: Arc::default(),
     };
+
     interface::run_compiler(config, |compiler| {
         compiler.enter(|queries| {
             queries.global_ctxt().unwrap().enter(|tcx| {
                 let hir_krate = tcx.hir();
-                let mut promoted_map = HashMap::new();
-                let mut body_map = HashMap::new();
 
-                for def_id in hir_krate.body_owners() {
-                    let (body_steal, promoted_steal) = tcx.mir_promoted(def_id);
-                    let body = body_steal.borrow().clone();
-                    let promoted = promoted_steal.borrow().clone();
-                    promoted_map.insert(def_id, (body, promoted));
+                let promoted_map =
+                    hir_krate.body_owners().map(|def_id| {
+                        let (body_steal, promoted_steal) = tcx.mir_promoted(def_id);
+                        let body = body_steal.borrow().clone();
+                        let promoted = promoted_steal.borrow().clone();
+                        (def_id, (body, promoted))
+                    }).collect::<HashMap<_, _>>();
 
-                    let consumer_opts = consumers::ConsumerOptions::PoloniusOutputFacts;
-                    let body_with_facts = consumers::get_body_with_borrowck_facts(tcx, def_id, consumer_opts);
-                    body_map.insert(def_id, body_with_facts.into());
-                }
+                let body_map =
+                    hir_krate.body_owners().map(|def_id| {
+                       let consumer_opts = consumers::ConsumerOptions::PoloniusOutputFacts;
+                        let body_with_facts = consumers::get_body_with_borrowck_facts(tcx, def_id, consumer_opts);
+                        (def_id, body_with_facts.into())
+                    }).collect::<HashMap<_, _>>();
 
-                tcx.analysis(());
                 let mut analysis_map = run_pcs_on_all_fns(&body_map, tcx);
 
-                // mutations
-                for make_mutator in &make_mutators {
-                    for (def_id, (body, promoted)) in promoted_map.iter() {
-                        let mut curr_mutator = make_mutator();
-                        let analysis  = analysis_map.get_mut(&def_id).unwrap();
-                        while let Some(next_mutant) = curr_mutator.next_mutant(analysis, body.clone()) {
-                            let (borrowck_result, _) = borrowck::do_mir_borrowck(tcx, &next_mutant, &promoted, None);
-                            // TODO do something with borrowck_result
-                        }
-                    }
-                }
+                mutators.iter_mut().for_each(|mutator| {
+                    promoted_map.iter().for_each(|(def_id, (body, promoted))| {
+                        let mut analysis = analysis_map.get_mut(&def_id).unwrap();
+                        body.basic_blocks.indices().for_each(|bb| {
+                            let (numerator, denominator) = mutator.run_ratio();
+                            if rand::rng().random_ratio(numerator, denominator) {
+                                let fpcs_bb = analysis.get_all_for_bb(bb);
+                                let mutants = mutator.generate_mutants(&fpcs_bb, &body);
+                                // let (borrowck_result, _) = borrowck::do_mir_borrowck(tcx, &generate_mutants, &promoted, None);
+                                // TODO do something with borrowck_result
+                            }
+                        })
+                    })
+                });
                 // TODO rustc might have some stateful mechanism for limiting the number of errors shown and not showing the same error twice
             })
         });
@@ -265,5 +263,5 @@ fn main() {
     let args: Vec<_> = std::env::args().collect();
     let mut input_file = args.get(1).unwrap();
     println!("{:?}", *input_file);
-    run_tests(input_file, vec![MutablyLentDetector::make]);
+    run_tests(input_file, vec![&mut MutablyLentDetector]);
 }
