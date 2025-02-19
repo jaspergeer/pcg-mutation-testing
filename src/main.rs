@@ -20,13 +20,27 @@ use pcg_evaluation::rustc_interface::borrowck::consumers;
 use pcg_evaluation::rustc_interface::data_structures::fx::FxHashMap;
 
 use pcg_evaluation::rustc_interface::errors::registry;
-use pcg_evaluation::rustc_interface::middle::ty;
+use pcg_evaluation::rustc_interface::errors::emitter::Emitter;
+
 use pcg_evaluation::rustc_interface::middle::util;
 use pcg_evaluation::rustc_interface::middle::mir;
 
+use pcg_evaluation::rustc_interface::middle::ty;
+use pcg_evaluation::rustc_interface::middle::ty::Ty;
+use pcg_evaluation::rustc_interface::middle::ty::Region;
+use pcg_evaluation::rustc_interface::middle::ty::RegionKind;
+
 use pcg_evaluation::rustc_interface::middle::mir::Place as MirPlace;
 use pcg_evaluation::rustc_interface::middle::mir::Promoted;
+use pcg_evaluation::rustc_interface::middle::mir::Local;
+use pcg_evaluation::rustc_interface::middle::mir::LocalDecl;
 use pcg_evaluation::rustc_interface::middle::mir::BorrowCheckResult;
+use pcg_evaluation::rustc_interface::middle::mir::BorrowKind;
+use pcg_evaluation::rustc_interface::middle::mir::MutBorrowKind;
+use pcg_evaluation::rustc_interface::middle::mir::Statement;
+use pcg_evaluation::rustc_interface::middle::mir::StatementKind;
+use pcg_evaluation::rustc_interface::middle::mir::Rvalue;
+use pcg_evaluation::rustc_interface::middle::mir::ClearCrossCrate;
 
 use pcg_evaluation::rustc_interface::middle::query::queries::mir_built;
 use pcg_evaluation::rustc_interface::middle::query::queries::mir_borrowck::ProvidedValue;
@@ -74,10 +88,16 @@ use pcs::utils::maybe_old::MaybeOldPlace;
 use rand::rng;
 use rand::Rng;
 
+// struct DiagCaptureEmitter;
+
+// impl Emitter for DiagCaptureEmitter {
+
+// }
+
 #[derive(Serialize)]
 enum BorrowCheckInfo {
     Passed,
-    Failed { error_msg: String }
+    Failed { error_codes: Vec<String> }
 }
 
 #[derive(Serialize)]
@@ -138,9 +158,9 @@ trait Mutator {
 //     fn run_ratio(&mut self) -> (u32, u32) { (1, 1) }
 // }
 
-struct MutablyLentDetector;
+struct MutableBorrowMutator;
 
-impl Mutator for MutablyLentDetector {
+impl Mutator for MutableBorrowMutator {
     fn generate_mutants<'tcx>(&mut self, tcx: &TyCtxt<'tcx>, fpcs_bb: &FreePcsBasicBlock<'tcx>, body: &Body<'tcx>) -> Vec<Mutant<'tcx>> {
 
         fn generate_mutants_location<'mir, 'tcx>(tcx: &TyCtxt<'tcx>, body: &Body<'tcx>, location: &FreePcsLocation<'tcx>) -> Vec<Mutant<'tcx>> {
@@ -172,6 +192,7 @@ impl Mutator for MutablyLentDetector {
                 if !visited.contains(&curr) {
                     if let Some(place) = current_place_of_node(tcx, curr) {
                         mutably_lent_places.insert(place);
+                        // TODO I don't think we record places in the owned PCG...
                     }
                     let children = borrows_graph.edges_blocked_by(curr, repacker).flat_map(|edge| {
                         edge.blocked_by_nodes(repacker)
@@ -186,7 +207,39 @@ impl Mutator for MutablyLentDetector {
             for place in mutably_lent_places.iter() {
                 println!("{:?} is mutably lent", place)
             }
-            mutably_lent_places.iter().map(|place| Mutant { body: body.clone(), info: "TODO".into() }).collect()
+            mutably_lent_places.iter().map(|place| {
+                let mut mutant_body = body.clone();
+
+                let fresh_local = Local::from_usize(mutant_body.local_decls.len());
+                let erased_region = Region::new_from_kind(*tcx, RegionKind::ReErased);
+
+
+                let borrow_ty = Ty::new_mut_ref(*tcx, erased_region, place.ty(&body.local_decls, *tcx).ty);
+
+                let bb_index = location.location.block;
+                let statement_index = location.location.statement_index;
+                let bb = mutant_body.basic_blocks_mut().get_mut(bb_index).unwrap();
+                let statement_source_info = bb.statements.get(statement_index).unwrap().source_info;
+
+                let default_mut_borrow = BorrowKind::Mut { kind: MutBorrowKind::Default };
+                let new_borrow = Statement {
+                    source_info: statement_source_info,
+                    kind: StatementKind::Assign(Box::new((MirPlace::from(fresh_local), Rvalue::Ref(erased_region, default_mut_borrow, *place))))
+                };
+                let mention_local = Statement {
+                    source_info: statement_source_info,
+                    kind: StatementKind::PlaceMention(Box::new(MirPlace::from(fresh_local)))
+                };
+
+                bb.statements.insert(statement_index, new_borrow);
+                bb.statements.insert(bb.statements.len(), mention_local);
+
+                let fresh_local_decl = LocalDecl::with_source_info(borrow_ty, statement_source_info);
+                mutant_body.local_decls.raw.insert(fresh_local.index(), fresh_local_decl);
+                // TODO also emit mutant w/ immutable reference to place
+
+                Mutant { body: mutant_body, info: "TODO".into() }
+            }).collect()
         }
 
         fpcs_bb.statements.iter().flat_map(|statement| {
@@ -285,16 +338,16 @@ fn run_tests(input_file: &String, mut mutators: Vec<&mut (dyn Mutator + Send)>) 
             },
             .. config::Options::default()
         },
-        crate_cfg: Vec::new(),       // FxHashSet<(String, Option<String>)>
-        crate_check_cfg: Vec::new(), // CheckCfg
+        crate_cfg: Vec::new(),
+        crate_check_cfg: Vec::new(),
         input: config::Input::File(PathBuf::from(input_file)),
-        output_dir: None,  // Option<PathBuf>
-        output_file: None, // Option<PathBuf>
-        file_loader: None, // Option<Box<dyn FileLoader + Send + Sync>>
+        output_dir: None,
+        output_file: None,
+        file_loader: None,
         locale_resources: driver::DEFAULT_LOCALE_RESOURCES,
-        lint_caps: FxHashMap::default(), // FxHashMap<lint::LintId, lint::Level>
-        psess_created: None, //Option<Box<dyn FnOnce(&mut ParseSess) + Send>>
-        register_lints: None, // Option<Box<dyn Fn(&Session, &mut LintStore) + Send + Sync>>
+        lint_caps: FxHashMap::default(),
+        psess_created: None,
+        register_lints: None,
         override_queries: None,
         registry: registry::Registry::new(errors::codes::DIAGNOSTICS),
         make_codegen_backend: None,
@@ -330,7 +383,7 @@ fn run_tests(input_file: &String, mut mutators: Vec<&mut (dyn Mutator + Send)>) 
 
                 for mutator in mutators.iter_mut() {
                     for (def_id, (body, promoted)) in promoted_map.iter() {
-                        let mut analysis = analysis_map.get_mut(&def_id).unwrap();
+                        let analysis = analysis_map.get_mut(&def_id).unwrap();
                         for bb in body.basic_blocks.indices() {
                             let (numerator, denominator) = mutator.run_ratio();
                             if rand::rng().random_ratio(numerator, denominator) {
@@ -338,12 +391,13 @@ fn run_tests(input_file: &String, mut mutators: Vec<&mut (dyn Mutator + Send)>) 
                                 eprintln!("Running mutator for def_id: {:?}, bb: {:?}", def_id, bb);
                                 let mutants = mutator.generate_mutants(&tcx, &fpcs_bb, &body);
                                 for Mutant { body, info } in mutants {
+                                    eprintln!("mutant body: {:?}", body);
                                     let (borrowck_result, _) = borrowck::do_mir_borrowck(tcx, &body, &promoted, None);
                                     let borrowck_info = borrowck_info_of_borrowck_result(borrowck_result);
                                     let log_entry = LogEntry {
                                         mutation_type: mutator.name(),
                                         borrow_check_result: borrowck_info,
-                                        info: "".into()
+                                        info: info
                                     };
                                     mutation_log.insert(mutation_log.len().to_string().into(),
                                                         serde_json::to_value(log_entry).unwrap());
@@ -363,5 +417,5 @@ fn main() {
     let args: Vec<_> = std::env::args().collect();
     let mut input_file = args.get(1).unwrap();
     println!("{:?}", *input_file);
-    run_tests(input_file, vec![&mut MutablyLentDetector]);
+    run_tests(input_file, vec![&mut MutableBorrowMutator]);
 }
