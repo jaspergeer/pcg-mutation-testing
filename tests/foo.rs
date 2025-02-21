@@ -1,8 +1,96 @@
 fn main() {
-    12;
+}
+
+fn bar() -> i64 {
+    let mut x = 1;
+    let y = &mut x;
+    let z = &mut *y;
+    *z;
+    let mut x = 1;
+    let y = &mut x;
+    let z = &mut *y;
+    *z;
+    let mut x = 1;
+    let y = &mut x;
+    let z = &mut *y;
+    *z;
+    let mut x = 1;
+    let y = &mut x;
+    let z = &mut *y;
+    *z;
+    let mut x = 1;
+    let y = &mut x;
+    let z = &mut *y;
+    *z;
+    let mut x = 1;
+    let y = &mut x;
+    let z = &mut *y;
+    *z;
+    let mut x = 1;
+    let y = &mut x;
+    let z = &mut *y;
+    *z;
+    let mut x = 1;
+    let y = &mut x;
+    let z = &mut *y;
+    *z;
+    let mut x = 1;
+    let y = &mut x;
+    let z = &mut *y;
+    *z;
+    let mut x = 1;
+    let y = &mut x;
+    let z = &mut *y;
+    *z;
+    let mut x = 1;
+    let y = &mut x;
+    let z = &mut *y;
+    *z
 }
 
 fn foo() -> i64 {
-    let f = &mut 1;
-    *f
+    let mut x = 1;
+    let y = &mut x;
+    let z = &mut *y;
+    *z;
+    let mut x = 1;
+    let y = &mut x;
+    let z = &mut *y;
+    *z;
+    let mut x = 1;
+    let y = &mut x;
+    let z = &mut *y;
+    *z;
+    let mut x = 1;
+    let y = &mut x;
+    let z = &mut *y;
+    *z;
+    let mut x = 1;
+    let y = &mut x;
+    let z = &mut *y;
+    *z;
+    let mut x = 1;
+    let y = &mut x;
+    let z = &mut *y;
+    *z;
+    let mut x = 1;
+    let y = &mut x;
+    let z = &mut *y;
+    *z;
+    let mut x = 1;
+    let y = &mut x;
+    let z = &mut *y;
+    *z;
+    let mut x = 1;
+    let y = &mut x;
+    let z = &mut *y;
+    *z;
+    let mut x = 1;
+    let y = &mut x;
+    let z = &mut *y;
+    *z;
+    let mut x = 1;
+    let y = &mut x;
+    let z = &mut *y;
+    *z
 }

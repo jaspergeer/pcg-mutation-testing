@@ -20,6 +20,7 @@ use pcg_evaluation::rustc_interface::borrowck::consumers;
 use pcg_evaluation::rustc_interface::data_structures::fx::FxHashMap;
 
 use pcg_evaluation::rustc_interface::errors::registry;
+use pcg_evaluation::rustc_interface::errors::fallback_fluent_bundle;
 use pcg_evaluation::rustc_interface::errors::emitter::Emitter;
 
 use pcg_evaluation::rustc_interface::middle::util;
@@ -51,7 +52,11 @@ use pcg_evaluation::rustc_interface::session::config;
 use pcg_evaluation::rustc_interface::session::Session;
 
 use pcg_evaluation::rustc_interface::index::IndexVec;
+use pcg_evaluation::rustc_interface::driver::DEFAULT_LOCALE_RESOURCES;
 
+use pcg_evaluation::errors::initialize_error_tracking;
+use pcg_evaluation::errors::track_body_error_codes;
+use pcg_evaluation::errors::get_registered_errors;
 
 use pcg_evaluation::rustc_interface::{
     driver::{self, args, Compilation},
@@ -68,9 +73,9 @@ use pcg_evaluation::rustc_interface::{
         EarlyDiagCtxt,
     },
 };
+use pcs::run_combined_pcs;
 use pcs::combined_pcs::BodyWithBorrowckFacts;
 use pcs::combined_pcs::PCGNode;
-use pcs::run_combined_pcs;
 use pcs::free_pcs::FreePcsLocation;
 use pcs::free_pcs::FreePcsBasicBlock;
 use pcs::free_pcs::CapabilityKind;
@@ -207,6 +212,7 @@ impl Mutator for MutableBorrowMutator {
             for place in mutably_lent_places.iter() {
                 println!("{:?} is mutably lent", place)
             }
+
             mutably_lent_places.iter().map(|place| {
                 let mut mutant_body = body.clone();
 
@@ -325,10 +331,6 @@ fn run_pcs_on_all_fns<'mir, 'tcx>(body_map: &'mir HashMap<LocalDefId, BodyWithBo
 
 fn run_tests(input_file: &String, mut mutators: Vec<&mut (dyn Mutator + Send)>) {
 
-   fn borrowck_info_of_borrowck_result<'tcx>(borrowck_result: BorrowCheckResult<'tcx>) -> BorrowCheckInfo {
-       BorrowCheckInfo::Passed
-   }
-
     let config = interface::Config {
         // Command line options
         opts: config::Options {
@@ -358,6 +360,8 @@ fn run_tests(input_file: &String, mut mutators: Vec<&mut (dyn Mutator + Send)>) 
     };
 
     interface::run_compiler(config, |compiler| {
+        let fallback_bundle = fallback_fluent_bundle(DEFAULT_LOCALE_RESOURCES.to_vec(), false);
+        compiler.sess.dcx().make_silent(fallback_bundle, None, false);
         compiler.enter(|queries| {
             queries.global_ctxt().unwrap().enter(|tcx| {
                 let hir_krate = tcx.hir();
@@ -381,6 +385,8 @@ fn run_tests(input_file: &String, mut mutators: Vec<&mut (dyn Mutator + Send)>) 
 
                 let mut mutation_log = JSONMap::new();
 
+                initialize_error_tracking();
+
                 for mutator in mutators.iter_mut() {
                     for (def_id, (body, promoted)) in promoted_map.iter() {
                         let analysis = analysis_map.get_mut(&def_id).unwrap();
@@ -392,8 +398,20 @@ fn run_tests(input_file: &String, mut mutators: Vec<&mut (dyn Mutator + Send)>) 
                                 let mutants = mutator.generate_mutants(&tcx, &fpcs_bb, &body);
                                 for Mutant { body, info } in mutants {
                                     eprintln!("mutant body: {:?}", body);
+                                    track_body_error_codes(*def_id);
                                     let (borrowck_result, _) = borrowck::do_mir_borrowck(tcx, &body, &promoted, None);
-                                    let borrowck_info = borrowck_info_of_borrowck_result(borrowck_result);
+                                    let borrowck_info = {
+                                        if let Some(_) = borrowck_result.tainted_by_errors {
+                                            let error_codes = get_registered_errors();
+                                            BorrowCheckInfo::Failed {
+                                                error_codes: error_codes.iter()
+                                                                        .map(|err_code| err_code.to_string())
+                                                                        .collect()
+                                            }
+                                        } else {
+                                            BorrowCheckInfo::Passed
+                                        }
+                                    };
                                     let log_entry = LogEntry {
                                         mutation_type: mutator.name(),
                                         borrow_check_result: borrowck_info,
@@ -406,6 +424,8 @@ fn run_tests(input_file: &String, mut mutators: Vec<&mut (dyn Mutator + Send)>) 
                         }
                     }
                 }
+
+                // TODO write this to a file
                 eprintln!("LOG: {}", serde_json::to_string_pretty(&mutation_log).unwrap())
                 // TODO rustc might have some stateful mechanism for limiting the number of errors shown and not showing the same error twice
             })
