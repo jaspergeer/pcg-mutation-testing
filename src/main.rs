@@ -123,46 +123,6 @@ trait Mutator {
     fn name(&mut self) -> String;
 }
 
-// struct TestMutator;
-
-// impl Mutator for TestMutator {
-//     fn generate_mutants<'tcx>(&mut self, tcx: &TyCtxt<'tcx>, fpcs_bb: &FreePcsBasicBlock<'tcx>, body: &Body<'tcx>) -> Vec<Body<'tcx>> {
-//         let mut body = body.clone();
-//         for block in body.basic_blocks_mut() {
-//             let mut insertions = HashMap::new();
-//             for (i, statement) in block.statements.iter().enumerate() {
-//                 if let mir::StatementKind::Assign(assign_box) = statement.kind.clone() {
-//                     let (place, _) = *assign_box;
-//                     let new_local = mir::Local::from_usize(1);
-//                     insertions.insert(
-//                         i,
-//                         mir::Statement {
-//                             source_info: statement.source_info,
-//                             kind: mir::StatementKind::Assign(Box::new((
-//                                 mir::Place {
-//                                     local: new_local,
-//                                     projection: ty::List::empty(),
-//                                 },
-//                                 mir::Rvalue::Use(mir::Operand::Move(place)),
-//                             ))),
-//                         },
-//                     );
-//                 }
-//             }
-
-//             let mut offset = 1;
-//             for (i, statement) in insertions {
-//                 block.statements.insert(i + offset, statement);
-//                 offset += 1;
-//             }
-//         }
-//         eprintln!("RUN MUTATOR");
-//         vec![body]
-//     }
-
-//     fn run_ratio(&mut self) -> (u32, u32) { (1, 1) }
-// }
-
 struct MutableBorrowMutator;
 
 impl Mutator for MutableBorrowMutator {
@@ -297,7 +257,6 @@ fn run_pcs_on_all_fns<'mir, 'tcx>(body_map: &'mir HashMap<LocalDefId, BodyWithBo
                     tcx,
                     vis_dir.map(|dir| format!("{}/{}", dir, item_name)),
                 );
-
                 analysis_map.insert(def_id, analysis);
 
                 println!(
@@ -366,14 +325,6 @@ fn run_tests(input_file: &String, mut mutators: Vec<&mut (dyn Mutator + Send)>) 
             queries.global_ctxt().unwrap().enter(|tcx| {
                 let hir_krate = tcx.hir();
 
-                let promoted_map =
-                    hir_krate.body_owners().map(|def_id| {
-                        let (body_steal, promoted_steal) = tcx.mir_promoted(def_id);
-                        let body = body_steal.borrow().clone();
-                        let promoted = promoted_steal.borrow().clone();
-                        (def_id, (body, promoted))
-                    }).collect::<HashMap<_, _>>();
-
                 let body_map =
                     hir_krate.body_owners().map(|def_id| {
                         let consumer_opts = consumers::ConsumerOptions::PoloniusOutputFacts;
@@ -388,7 +339,9 @@ fn run_tests(input_file: &String, mut mutators: Vec<&mut (dyn Mutator + Send)>) 
                 initialize_error_tracking();
 
                 for mutator in mutators.iter_mut() {
-                    for (def_id, (body, promoted)) in promoted_map.iter() {
+                    for (def_id, body_with_borrowck_facts) in body_map.iter() {
+                        let body = &body_with_borrowck_facts.body;
+                        let promoted = &body_with_borrowck_facts.promoted;
                         let analysis = analysis_map.get_mut(&def_id).unwrap();
                         for bb in body.basic_blocks.indices() {
                             let (numerator, denominator) = mutator.run_ratio();
@@ -397,7 +350,6 @@ fn run_tests(input_file: &String, mut mutators: Vec<&mut (dyn Mutator + Send)>) 
                                 eprintln!("Running mutator for def_id: {:?}, bb: {:?}", def_id, bb);
                                 let mutants = mutator.generate_mutants(&tcx, &fpcs_bb, &body);
                                 for Mutant { body, info } in mutants {
-                                    eprintln!("mutant body: {:?}", body);
                                     track_body_error_codes(*def_id);
                                     let (borrowck_result, _) = borrowck::do_mir_borrowck(tcx, &body, &promoted, None);
                                     let borrowck_info = {
