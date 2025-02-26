@@ -22,6 +22,7 @@ use pcg_evaluation::rustc_interface::borrowck;
 use pcg_evaluation::rustc_interface::borrowck::consumers;
 
 use pcg_evaluation::rustc_interface::data_structures::fx::FxHashMap;
+use pcg_evaluation::rustc_interface::data_structures::fx::FxHashSet;
 
 use pcg_evaluation::rustc_interface::errors::registry;
 use pcg_evaluation::rustc_interface::errors::fallback_fluent_bundle;
@@ -36,6 +37,7 @@ use pcg_evaluation::rustc_interface::middle::ty::Region;
 use pcg_evaluation::rustc_interface::middle::ty::RegionKind;
 
 use pcg_evaluation::rustc_interface::middle::mir::Place as MirPlace;
+use pcg_evaluation::rustc_interface::middle::mir::PlaceRef;
 use pcg_evaluation::rustc_interface::middle::mir::Promoted;
 use pcg_evaluation::rustc_interface::middle::mir::Local;
 use pcg_evaluation::rustc_interface::middle::mir::LocalDecl;
@@ -85,15 +87,17 @@ use pcg_evaluation::rustc_interface::{
 use pcs::run_combined_pcs;
 use pcs::combined_pcs::BodyWithBorrowckFacts;
 use pcs::combined_pcs::PCGNode;
-use pcs::free_pcs::FreePcsLocation;
-use pcs::free_pcs::FreePcsBasicBlock;
+use pcs::combined_pcs::PCGNodeLike;
+use pcs::free_pcs::PcgLocation;
+use pcs::free_pcs::PcgBasicBlock;
 use pcs::free_pcs::CapabilityKind;
 use pcs::FpcsOutput;
 
-use pcs::borrows::borrow_pcg_edge::LocalNode;
-use pcs::borrows::borrows_graph::BorrowsGraph;
-use pcs::borrows::edge::kind::BorrowPCGEdgeKind;
-use pcs::borrows::edge_data::EdgeData;
+use pcs::borrow_pcg::borrow_pcg_edge::LocalNode;
+use pcs::borrow_pcg::borrow_pcg_edge::BorrowPCGEdgeLike;
+use pcs::borrow_pcg::graph::BorrowsGraph;
+use pcs::borrow_pcg::edge::kind::BorrowPCGEdgeKind;
+use pcs::borrow_pcg::edge_data::EdgeData;
 use pcs::utils::PlaceRepacker;
 use pcs::utils::place::Place as PCGPlace;
 use pcs::utils::maybe_remote::MaybeRemotePlace;
@@ -143,7 +147,7 @@ struct Mutant<'tcx> {
 }
 
 trait Mutator {
-    fn generate_mutants<'tcx>(&mut self, tcx: &TyCtxt<'tcx>, fpcs_bb: &FreePcsBasicBlock<'tcx>, body: &Body<'tcx>) -> Vec<Mutant<'tcx>>;
+    fn generate_mutants<'tcx>(&mut self, tcx: &TyCtxt<'tcx>, fpcs_bb: &PcgBasicBlock<'tcx>, body: &Body<'tcx>) -> Vec<Mutant<'tcx>>;
     fn run_ratio(&mut self) -> (u32, u32);
     fn name(&mut self) -> String;
 }
@@ -151,32 +155,45 @@ trait Mutator {
 struct MutableBorrowMutator;
 
 impl Mutator for MutableBorrowMutator {
-    fn generate_mutants<'tcx>(&mut self, tcx: &TyCtxt<'tcx>, fpcs_bb: &FreePcsBasicBlock<'tcx>, body: &Body<'tcx>) -> Vec<Mutant<'tcx>> {
+    fn generate_mutants<'tcx>(&mut self, tcx: &TyCtxt<'tcx>, fpcs_bb: &PcgBasicBlock<'tcx>, body: &Body<'tcx>) -> Vec<Mutant<'tcx>> {
 
-        fn generate_mutants_location<'mir, 'tcx>(tcx: &TyCtxt<'tcx>, body: &Body<'tcx>, location: &FreePcsLocation<'tcx>) -> Vec<Mutant<'tcx>> {
+        fn current_place_of_node<'tcx>(tcx: &TyCtxt<'tcx>, node: PCGNode<'tcx>) -> Option<MirPlace<'tcx>> {
+            match node {
+                PCGNode::Place(maybe_remote_place) =>
+                    match maybe_remote_place {
+                        MaybeRemotePlace::Local(maybe_old_place) => {
+                            match maybe_old_place {
+                                MaybeOldPlace::Current { place } =>
+                                    Some(PlaceRef::from(place).to_place(*tcx)),
+                                _ => None
+                            }
+                        },
+                        _ => None
+                    },
+                _ => None
+            }
+        }
+
+        fn generate_mutants_location<'mir, 'tcx>(tcx: &TyCtxt<'tcx>, body: &Body<'tcx>, location: &PcgLocation<'tcx>) -> Vec<Mutant<'tcx>> {
+
             let borrows_state = location.borrows.post_main();
             let borrows_graph = borrows_state.graph();
             let repacker = PlaceRepacker::new(body, *tcx);
 
-            let mut leaf_nodes = borrows_graph.leaf_nodes(repacker, None);
-            let mut to_visit = leaf_nodes.drain()
-                                         .filter(|node| borrows_state.get_capability((*node).into()) == Some(CapabilityKind::Exclusive))
+            let mut leaf_edges = borrows_graph.frozen_graph().leaf_edges(repacker);
+            let mut to_visit = leaf_edges.iter()
+                                         .flat_map(|edge| match edge.kind() {
+                                             BorrowPCGEdgeKind::Borrow(borrow_edge) =>
+                                                 if borrow_edge.is_mut() {
+                                                    edge.blocked_nodes(repacker)
+                                                 } else {
+                                                    FxHashSet::default()
+                                                 },
+                                             _ => FxHashSet::default()
+                                         })
                                          .collect::<VecDeque<_>>();
             let mut visited = HashSet::new();
             let mut mutably_lent_places = HashSet::new();
-
-            fn current_place_of_node<'tcx>(tcx: &TyCtxt<'tcx>, node: LocalNode<'tcx>) -> Option<MirPlace<'tcx>> {
-                match node {
-                    PCGNode::Place(place) =>
-                        match place {
-                            MaybeOldPlace::Current { place } => {
-                                Some(place.to_mir_place(tcx))
-                            },
-                            _ => None
-                        },
-                    _ => None
-                }
-            }
 
             while let Some(curr) = to_visit.pop_front() {
                 if !visited.contains(&curr) {
@@ -184,13 +201,16 @@ impl Mutator for MutableBorrowMutator {
                         mutably_lent_places.insert(place);
                         // TODO I don't think we record places in the owned PCG...
                     }
-                    let children = borrows_graph.edges_blocked_by(curr, repacker).flat_map(|edge| {
-                        edge.blocked_by_nodes(repacker)
-                    });
-                    for child in children {
-                        to_visit.push_back(child);
+
+                    if let Some(local_node) = curr.try_to_local_node() {
+                        let children = borrows_graph.edges_blocked_by(local_node, repacker).flat_map(|edge| {
+                            edge.blocked_nodes(repacker)
+                        });
+                        for child in children {
+                            to_visit.push_back(child);
+                        }
+                        visited.insert(curr);
                     }
-                    visited.insert(curr);
                 }
             }
 
@@ -269,7 +289,7 @@ fn run_pcg_on_all_fns<'mir, 'tcx>(body_map: &'mir HashMap<LocalDefId, BodyWithBo
                 }
                 eprintln!("Running PCG on function: {}", item_name);
                 let analysis = run_combined_pcs(
-                    &body,
+                    body,
                     tcx,
                     None,
                 );
@@ -334,38 +354,39 @@ fn do_mutation_tests<'tcx>(tcx: TyCtxt<'tcx>, compiler: &Compiler, mutators: &mu
                 for bb in body.basic_blocks.indices() {
                     let (numerator, denominator) = mutator.run_ratio();
                     if rand::rng().random_ratio(numerator, denominator) {
-                        let fpcs_bb = analysis.get_all_for_bb(bb);
-                        eprintln!("Running mutator for def_id: {:?}, bb: {:?}", def_id, bb);
-                        let mutants = mutator.generate_mutants(&tcx, &fpcs_bb, &body);
-                        for Mutant { body, location, info } in mutants {
-                            println!("mutant at {} in {:?}", serde_json::to_value(&location).unwrap(), def_id);
-                            track_body_error_codes(*def_id);
+                        if let Result::Ok(Some(fpcs_bb)) = analysis.get_all_for_bb(bb) {
+                            eprintln!("Running mutator for def_id: {:?}, bb: {:?}", def_id, bb);
+                            let mutants = mutator.generate_mutants(&tcx, &fpcs_bb, &body);
+                            for Mutant { body, location, info } in mutants {
+                                eprintln!("mutant at {} in {:?}", serde_json::to_value(&location).unwrap(), def_id);
+                                track_body_error_codes(*def_id);
 
-                            let _ = catch_fatal_errors(|| {
-                                let (borrowck_result, _) = borrowck::do_mir_borrowck(tcx, &body, &promoted, None);
-                                let borrowck_info = {
-                                    if let Some(_) = borrowck_result.tainted_by_errors {
-                                        let error_codes = get_registered_errors();
-                                        BorrowCheckInfo::Failed {
-                                            error_codes: error_codes.iter()
-                                                                    .map(|err_code| err_code.to_string())
-                                                                    .collect()
+                                let _ = catch_fatal_errors(|| {
+                                    let (borrowck_result, _) = borrowck::do_mir_borrowck(tcx, &body, &promoted, None);
+                                    let borrowck_info = {
+                                        if let Some(_) = borrowck_result.tainted_by_errors {
+                                            let error_codes = get_registered_errors();
+                                            BorrowCheckInfo::Failed {
+                                                error_codes: error_codes.iter()
+                                                                        .map(|err_code| err_code.to_string())
+                                                                        .collect()
+                                            }
+                                        } else {
+                                            BorrowCheckInfo::Passed
                                         }
-                                    } else {
-                                        BorrowCheckInfo::Passed
-                                    }
-                                };
-                                let log_entry = LogEntry {
-                                    mutation_type: mutator.name(),
-                                    borrow_check_result: borrowck_info,
-                                    definition: format!("{def_id:?}"),
-                                    location: location,
-                                    info: info
-                                };
-                                mutation_log.insert(mutation_log.len().to_string().into(),
-                                                    serde_json::to_value(log_entry).unwrap());
-                            });
-                            compiler.sess.dcx().reset_err_count(); // cursed
+                                    };
+                                    let log_entry = LogEntry {
+                                        mutation_type: mutator.name(),
+                                        borrow_check_result: borrowck_info,
+                                        definition: format!("{def_id:?}"),
+                                        location: location,
+                                        info: info
+                                    };
+                                    mutation_log.insert(mutation_log.len().to_string().into(),
+                                                        serde_json::to_value(log_entry).unwrap());
+                                });
+                                compiler.sess.dcx().reset_err_count(); // cursed
+                            }
                         }
                     }
                 }
@@ -376,7 +397,8 @@ fn do_mutation_tests<'tcx>(tcx: TyCtxt<'tcx>, compiler: &Compiler, mutators: &mu
     let crate_name = tcx.crate_name(CrateNum::from_usize(0)).to_string();
     let json_data = serde_json::to_string_pretty(&mutation_log).unwrap();
     let output_file_path = results_dir.join(crate_name).with_extension("json");
-    let mut output_file = File::create(output_file_path).expect("Failed to create output file");
+    let mut output_file = File::create(&output_file_path).expect("Failed to create output file");
+    eprintln!("Writing results to {:?}", output_file_path);
     output_file.write_all(json_data.as_bytes()).expect("Failed to write results to file");
 }
 
