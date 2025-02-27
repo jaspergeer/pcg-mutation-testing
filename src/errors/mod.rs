@@ -24,7 +24,6 @@ use std::cell::RefCell;
 
 use super::rustc_interface::errors::{DiagInner, TRACK_DIAGNOSTIC, ErrCode};
 use super::rustc_interface::hir::def_id::LocalDefId;
-use super::rustc_interface::span::Span;
 
 thread_local! {
     static ERROR_CODES: RefCell<Vec<ErrCode>> = RefCell::new(Vec::default());
@@ -60,7 +59,7 @@ pub fn track_body_error_codes(def_id: LocalDefId) {
   // Update the current LocalDefId
   CURRENT_BODY.with(|id| {
     let mut id = id.borrow_mut();
-    let old_value = id.replace(def_id);
+    id.replace(def_id);
   });
   ERROR_CODES.with(|diagnostics| {
     let mut diagnostics = diagnostics.borrow_mut();

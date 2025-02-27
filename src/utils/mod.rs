@@ -1,10 +1,3 @@
-#![feature(rustc_private)]
-
-pub mod rustc_interface;
-pub mod errors;
-pub mod utils;
-pub mod mutator;
-
 pub fn env_feature_enabled(feature: &str) -> Option<bool> {
     match std::env::var(feature) {
         Ok(val) => {
