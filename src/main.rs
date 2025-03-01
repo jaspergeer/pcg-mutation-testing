@@ -1,15 +1,15 @@
 #![feature(rustc_private)]
 
-use pcg_evaluation::mutator::MutantLocation;
 use pcg_evaluation::mutator::Mutant;
+use pcg_evaluation::mutator::MutantRange;
 use pcg_evaluation::mutator::Mutator;
 
 use pcg_evaluation::mutator::mutable_borrow_mutator::MutableBorrowMutator;
 
 use pcg_evaluation::utils::env_feature_enabled;
 
-use std::io::Write;
 use std::fs::File;
+use std::io::Write;
 use std::path::PathBuf;
 
 use std::cell::RefCell;
@@ -24,18 +24,18 @@ use pcg_evaluation::rustc_interface::borrowck::consumers;
 
 use pcg_evaluation::rustc_interface::errors::fallback_fluent_bundle;
 
+use pcg_evaluation::rustc_interface::middle::query::queries::mir_borrowck::ProvidedValue;
 use pcg_evaluation::rustc_interface::middle::ty::TyCtxt;
 use pcg_evaluation::rustc_interface::middle::util::Providers;
-use pcg_evaluation::rustc_interface::middle::query::queries::mir_borrowck::ProvidedValue;
 
 use pcg_evaluation::rustc_interface::session::Session;
 
-use pcg_evaluation::rustc_interface::driver::DEFAULT_LOCALE_RESOURCES;
 use pcg_evaluation::rustc_interface::driver::Callbacks;
+use pcg_evaluation::rustc_interface::driver::DEFAULT_LOCALE_RESOURCES;
 
+use pcg_evaluation::errors::get_registered_errors;
 use pcg_evaluation::errors::initialize_error_tracking;
 use pcg_evaluation::errors::track_body_error_codes;
-use pcg_evaluation::errors::get_registered_errors;
 
 use pcg_evaluation::rustc_interface::hir::def_id::CrateNum;
 
@@ -49,8 +49,8 @@ use pcg_evaluation::rustc_interface::interface::interface::Compiler;
 use pcg_evaluation::rustc_interface::interface::Config;
 use pcg_evaluation::rustc_interface::interface::Queries;
 
-use pcs::run_combined_pcs;
 use pcs::combined_pcs::BodyWithBorrowckFacts;
+use pcs::run_combined_pcs;
 use pcs::FpcsOutput;
 
 use rand::Rng;
@@ -65,25 +65,29 @@ thread_local! {
 struct CrateMutantsData {
     name: String,
     failed: usize,
-    passed: usize
+    passed: usize,
 }
 
 #[derive(Serialize)]
 enum BorrowCheckInfo {
+    NoRun,
     Passed,
-    Failed { error_codes: HashSet<String> }
+    Failed { error_codes: HashSet<String> },
 }
 
 #[derive(Serialize)]
 struct LogEntry {
     mutation_type: String,
-    borrow_check_result: BorrowCheckInfo,
+    borrow_check_info: BorrowCheckInfo,
     definition: String,
-    location: MutantLocation,
-    info: String
+    range: MutantRange,
+    info: String,
 }
 
-fn run_pcg_on_all_fns<'mir, 'tcx>(body_map: &'mir HashMap<LocalDefId, BodyWithBorrowckFacts<'tcx>>, tcx: TyCtxt<'tcx>) -> HashMap<LocalDefId, FpcsOutput<'mir, 'tcx>> {
+fn run_pcg_on_all_fns<'mir, 'tcx>(
+    body_map: &'mir HashMap<LocalDefId, BodyWithBorrowckFacts<'tcx>>,
+    tcx: TyCtxt<'tcx>,
+) -> HashMap<LocalDefId, FpcsOutput<'mir, 'tcx>> {
     if std::env::var("CARGO_CRATE_NAME").is_ok() && std::env::var("CARGO_PRIMARY_PACKAGE").is_err()
     {
         // We're running in cargo, but the Rust file is a dependency (not part of the primary package)
@@ -140,7 +144,7 @@ fn run_pcg_on_all_fns<'mir, 'tcx>(body_map: &'mir HashMap<LocalDefId, BodyWithBo
 
 struct MutatorCallbacks {
     mutators: Vec<Box<dyn Mutator + Send>>,
-    results_dir: PathBuf
+    results_dir: PathBuf,
 }
 
 fn mir_borrowck<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> ProvidedValue<'tcx> {
@@ -164,8 +168,14 @@ fn set_mir_borrowck(_session: &Session, providers: &mut Providers) {
     providers.mir_borrowck = mir_borrowck;
 }
 
-fn do_mutation_tests<'tcx>(tcx: TyCtxt<'tcx>, compiler: &Compiler, mutators: &mut Vec<Box<dyn Mutator + Send>>, results_dir: &PathBuf) {
-    let body_map: HashMap<_, BodyWithBorrowckFacts<'tcx>> = unsafe { std::mem::transmute(BODIES.take()) };
+fn do_mutation_tests<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    compiler: &Compiler,
+    mutators: &mut Vec<Box<dyn Mutator + Send>>,
+    results_dir: &PathBuf,
+) {
+    let body_map: HashMap<_, BodyWithBorrowckFacts<'tcx>> =
+        unsafe { std::mem::transmute(BODIES.take()) };
     let mut analysis_map = run_pcg_on_all_fns(&body_map, tcx);
 
     let mut mutation_log = JSONMap::new();
@@ -174,47 +184,51 @@ fn do_mutation_tests<'tcx>(tcx: TyCtxt<'tcx>, compiler: &Compiler, mutators: &mu
 
     for mutator in mutators.iter_mut() {
         eprintln!("working dir {}", std::env::current_dir().unwrap().display());
-        for (def_id, analysis) in analysis_map.iter_mut() {
+        for (def_id, mut analysis) in analysis_map.iter_mut() {
             if let Some(body_with_borrowck_facts) = body_map.get(&def_id) {
                 let body = &body_with_borrowck_facts.body;
                 let promoted = &body_with_borrowck_facts.promoted;
 
-                for bb in body.basic_blocks.indices() {
-                    let (numerator, denominator) = mutator.run_ratio();
-                    if rand::rng().random_ratio(numerator, denominator) {
-                        if let Result::Ok(Some(fpcs_bb)) = analysis.get_all_for_bb(bb) {
-                            eprintln!("Running mutator for def_id: {:?}, bb: {:?}", def_id, bb);
-                            let mutants = mutator.generate_mutants(&tcx, &fpcs_bb, &body);
-                            for Mutant { body, location, info } in mutants {
-                                eprintln!("mutant at {} in {:?}", serde_json::to_value(&location).unwrap(), def_id);
-                                track_body_error_codes(*def_id);
+                let (numerator, denominator) = mutator.run_ratio();
+                let mutants = mutator.generate_mutants(&tcx, &mut analysis, &body);
 
-                                let (borrowck_result, _) = borrowck::do_mir_borrowck(tcx, &body, &promoted, None);
-                                let borrowck_info = {
-                                    if let Some(_) = borrowck_result.tainted_by_errors {
-                                        let error_codes = get_registered_errors();
-                                        BorrowCheckInfo::Failed {
-                                            error_codes: error_codes.iter()
-                                                                    .map(|err_code| err_code.to_string())
-                                                                    .collect()
-                                        }
-                                    } else {
-                                        BorrowCheckInfo::Passed
-                                    }
-                                };
-                                let log_entry = LogEntry {
-                                    mutation_type: mutator.name(),
-                                    borrow_check_result: borrowck_info,
-                                    definition: format!("{def_id:?}"),
-                                    location: location,
-                                    info: info
-                                };
-                                mutation_log.insert(mutation_log.len().to_string().into(),
-                                                    serde_json::to_value(log_entry).unwrap());
-                                compiler.sess.dcx().reset_err_count(); // cursed
+                for Mutant { body, range, info } in mutants {
+                    let borrow_check_info = if rand::random_ratio(numerator, denominator) {
+                        eprintln!(
+                            "mutant at {} in {:?}",
+                            serde_json::to_value(&range).unwrap(),
+                            def_id
+                        );
+                        track_body_error_codes(*def_id);
+
+                        let (borrowck_result, _) =
+                            borrowck::do_mir_borrowck(tcx, &body, &promoted, None);
+                        if let Some(_) = borrowck_result.tainted_by_errors {
+                            let error_codes = get_registered_errors();
+                            BorrowCheckInfo::Failed {
+                                error_codes: error_codes
+                                    .iter()
+                                    .map(|err_code| err_code.to_string())
+                                    .collect(),
                             }
+                        } else {
+                            BorrowCheckInfo::Passed
                         }
-                    }
+                    } else {
+                        BorrowCheckInfo::NoRun
+                    };
+                    let log_entry = LogEntry {
+                        mutation_type: mutator.name(),
+                        borrow_check_info: borrow_check_info,
+                        definition: format!("{def_id:?}"),
+                        range: range,
+                        info: info,
+                    };
+                    mutation_log.insert(
+                        mutation_log.len().to_string().into(),
+                        serde_json::to_value(log_entry).unwrap(),
+                    );
+                    compiler.sess.dcx().reset_err_count(); // cursed
                 }
             }
         }
@@ -225,7 +239,9 @@ fn do_mutation_tests<'tcx>(tcx: TyCtxt<'tcx>, compiler: &Compiler, mutators: &mu
     let output_file_path = results_dir.join(crate_name).with_extension("json");
     let mut output_file = File::create(&output_file_path).expect("Failed to create output file");
     eprintln!("Writing results to {:?}", output_file_path);
-    output_file.write_all(json_data.as_bytes()).expect("Failed to write results to file");
+    output_file
+        .write_all(json_data.as_bytes())
+        .expect("Failed to write results to file");
 }
 
 impl Callbacks for MutatorCallbacks {
@@ -240,7 +256,10 @@ impl Callbacks for MutatorCallbacks {
         _queries: &'tcx Queries<'tcx>,
     ) -> Compilation {
         let fallback_bundle = fallback_fluent_bundle(DEFAULT_LOCALE_RESOURCES.to_vec(), false);
-        compiler.sess.dcx().make_silent(fallback_bundle, None, false);
+        compiler
+            .sess
+            .dcx()
+            .make_silent(fallback_bundle, None, false);
         Compilation::Continue
     }
 
@@ -250,9 +269,12 @@ impl Callbacks for MutatorCallbacks {
         queries: &'tcx Queries<'tcx>,
     ) -> Compilation {
         // Don't run mutation testing on dependencies
-        if !(std::env::var("CARGO_CRATE_NAME").is_ok() && std::env::var("CARGO_PRIMARY_PACKAGE").is_err())
+        if !(std::env::var("CARGO_CRATE_NAME").is_ok()
+            && std::env::var("CARGO_PRIMARY_PACKAGE").is_err())
         {
-            queries.global_ctxt().unwrap().enter(|tcx| do_mutation_tests(tcx, compiler, &mut self.mutators, &self.results_dir));
+            queries.global_ctxt().unwrap().enter(|tcx| {
+                do_mutation_tests(tcx, compiler, &mut self.mutators, &self.results_dir)
+            });
         }
         if std::env::var("CARGO").is_ok() {
             Compilation::Continue
@@ -271,11 +293,14 @@ fn main() {
 
     let results_dir = match std::env::var("RESULTS_DIR") {
         Ok(str) => str.into(),
-        _ => std::env::current_dir().unwrap()
+        _ => std::env::current_dir().unwrap(),
     };
 
     rustc_args.extend(std::env::args().skip(1));
-    let mut callbacks = MutatorCallbacks { mutators: vec![Box::new(MutableBorrowMutator)], results_dir: results_dir };
+    let mut callbacks = MutatorCallbacks {
+        mutators: vec![Box::new(MutableBorrowMutator)],
+        results_dir: results_dir,
+    };
     driver::RunCompiler::new(&rustc_args, &mut callbacks)
         .run()
         .unwrap();
