@@ -27,18 +27,24 @@ use pcs::FpcsOutput;
 
 use pcs::free_pcs::PcgBasicBlock;
 use pcs::free_pcs::PcgLocation;
+use pcs::free_pcs::CapabilityKind;
+use pcs::free_pcs::CapabilitySummary;
+use pcs::free_pcs::CapabilityLocal;
 
 use pcs::combined_pcs::PCGNode;
 use pcs::combined_pcs::PCGNodeLike;
 
+use pcs::utils::PlaceRepacker;
 use pcs::utils::maybe_old::MaybeOldPlace;
 use pcs::utils::maybe_remote::MaybeRemotePlace;
-use pcs::utils::PlaceRepacker;
+use pcs::utils::place::Place;
 
 use pcs::borrow_pcg::borrow_pcg_edge::BorrowPCGEdgeLike;
+use pcs::borrow_pcg::borrow_pcg_capabilities::BorrowPCGCapabilities;
 use pcs::borrow_pcg::edge::kind::BorrowPCGEdgeKind;
 use pcs::borrow_pcg::edge_data::EdgeData;
 use pcs::borrow_pcg::graph::BorrowsGraph;
+use pcs::borrow_pcg::state::BorrowsState;
 
 pub struct MutableBorrowMutants;
 
@@ -54,12 +60,12 @@ impl Mutator for MutableBorrowMutator {
         fn node_into_current_place<'tcx>(
             tcx: &TyCtxt<'tcx>,
             node: PCGNode<'tcx>,
-        ) -> Option<MirPlace<'tcx>> {
+        ) -> Option<Place<'tcx>> {
             match node {
                 PCGNode::Place(maybe_remote_place) => match maybe_remote_place {
                     MaybeRemotePlace::Local(maybe_old_place) => match maybe_old_place {
                         MaybeOldPlace::Current { place } => {
-                            Some(PlaceRef::from(place).to_place(*tcx))
+                            Some(place)
                         }
                         _ => None,
                     },
@@ -70,9 +76,12 @@ impl Mutator for MutableBorrowMutator {
         }
 
         fn mutably_lent_places<'mir, 'tcx>(
-            graph: &BorrowsGraph<'tcx>,
+            borrows_state: &BorrowsState<'tcx>,
+            owned_capabilities: &CapabilitySummary<'tcx>,
             repacker: &PlaceRepacker<'mir, 'tcx>,
-        ) -> HashSet<MirPlace<'tcx>> {
+        ) -> HashSet<Place<'tcx>> {
+            let graph = borrows_state.graph();
+
             let leaf_edges = graph.frozen_graph().leaf_edges(*repacker);
             let mut to_visit = leaf_edges
                 .iter()
@@ -93,7 +102,19 @@ impl Mutator for MutableBorrowMutator {
             while let Some(curr) = to_visit.pop_front() {
                 if !visited.contains(&curr) {
                     if let Some(place) = node_into_current_place(&(*repacker).tcx(), curr) {
-                        mutably_lent_places.insert(place);
+                        if let Some(capability) = borrows_state.get_capability(curr) {
+                            if let CapabilityKind::Lent = capability {
+                                mutably_lent_places.insert(place);
+                            }
+                        } else if let Some(local_capability) = owned_capabilities.get(place.local) {
+                            if let CapabilityLocal::Allocated(projections) = local_capability {
+                                if let Some(capability) = projections.get(&place) {
+                                    if let CapabilityKind::Lent = capability {
+                                        mutably_lent_places.insert(place);
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     if let Some(local_node) = curr.try_to_local_node() {
@@ -140,32 +161,33 @@ impl Mutator for MutableBorrowMutator {
         ) -> Vec<Mutant<'tcx>> {
             let repacker = PlaceRepacker::new(body, *tcx);
 
-            let loc_mutably_lent = {
+            let mutably_lent_in_loc = {
                 let borrows_state = loc.borrows.post_main();
-                let borrows_graph = borrows_state.graph();
-                mutably_lent_places(&borrows_graph, &repacker)
+                let owned_capabilities = loc.states.post_main();
+                mutably_lent_places(&borrows_state, &owned_capabilities, &repacker)
             };
 
-            let succ_mutably_lent = successors
+            let mutably_lent_in_succ = successors
                 .iter()
                 .flat_map(|loc| {
-                    let borrows_state = loc.borrows.post_main();
-                    let borrows_graph = borrows_state.graph();
-                    mutably_lent_places(&borrows_graph, &repacker)
+                    let borrows_state = loc.borrows.post_operands();
+                    let owned_capabilities = loc.states.post_operands();
+                    mutably_lent_places(&borrows_state, &owned_capabilities, &repacker)
                 })
                 .collect::<HashSet<_>>();
 
-            loc_mutably_lent
+            mutably_lent_in_loc
                 .iter()
-                .filter(|loc| succ_mutably_lent.contains(loc))
+                .filter(|place| mutably_lent_in_succ.contains(place))
                 .flat_map(|place| {
+                    let mir_place = PlaceRef::from(*place).to_place(*tcx);
                     let mut mutant_body = body.clone();
 
                     let fresh_local = Local::from_usize(mutant_body.local_decls.len());
                     let erased_region = Region::new_from_kind(*tcx, RegionKind::ReErased);
 
                     let borrow_ty =
-                        Ty::new_mut_ref(*tcx, erased_region, place.ty(&body.local_decls, *tcx).ty);
+                        Ty::new_mut_ref(*tcx, erased_region, mir_place.ty(&body.local_decls, *tcx).ty);
 
                     let bb_index = loc.location.block;
                     let statement_index = loc.location.statement_index;
@@ -179,12 +201,12 @@ impl Mutator for MutableBorrowMutator {
                         source_info: statement_source_info,
                         kind: StatementKind::Assign(Box::new((
                             MirPlace::from(fresh_local),
-                            Rvalue::Ref(erased_region, default_mut_borrow, *place),
+                            Rvalue::Ref(erased_region, default_mut_borrow, mir_place),
                         ))),
                     };
 
                     let info =
-                        format!("{:?} was mutably lent, so inserted {:?}", place, new_borrow);
+                        format!("{:?} was mutably lent, so inserted {:?}, lent: {:?}", mir_place, new_borrow, &mutably_lent_in_loc);
 
                     bb.statements.insert(statement_index + 1, new_borrow);
 
@@ -198,7 +220,7 @@ impl Mutator for MutableBorrowMutator {
 
                     let mutant_loc = MutantLocation {
                         basic_block: loc.location.block.index(),
-                        statement_index: loc.location.statement_index,
+                        statement_index: loc.location.statement_index + 1,
                     };
 
                     Some(Mutant {
@@ -215,11 +237,11 @@ impl Mutator for MutableBorrowMutator {
 
         body.basic_blocks
             .indices()
-            .flat_map(|bb_index| match analysis.get_all_for_bb(bb_index) {
-                Ok(maybe_pcg_bb) => {
-                    maybe_pcg_bb.map(|pcg_bb| generate_mutants_for_bb(tcx, body, analysis, &pcg_bb))
-                }
-                _ => None,
+            .flat_map(|bb_index| {
+                analysis
+                    .get_all_for_bb(bb_index)
+                    .ok()?
+                    .map(|pcg_bb| generate_mutants_for_bb(tcx, body, analysis, &pcg_bb))
             })
             .flatten()
             .collect()
