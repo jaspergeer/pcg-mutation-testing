@@ -192,6 +192,7 @@ fn do_mutation_tests<'tcx>(
                 let (numerator, denominator) = mutator.run_ratio();
                 let mutants = mutator.generate_mutants(&tcx, &mut analysis, &body);
 
+                eprintln!("running mutator for {:?}", &def_id);
                 for Mutant { body, range, info } in mutants {
                     let borrow_check_info = if rand::random_ratio(numerator, denominator) {
                         eprintln!(
