@@ -1,7 +1,8 @@
 use super::utils::bogus_source_info;
-use super::utils::filter_borrowed_places_by_capability;
-use super::utils::filter_owned_places_by_capability;
+use super::utils::borrowed_places;
 use super::utils::fresh_local;
+
+use std::collections::HashSet;
 
 use super::mutator_impl::Mutant;
 use super::mutator_impl::MutantLocation;
@@ -11,8 +12,6 @@ use super::mutator_impl::PeepholeMutator;
 use crate::rustc_interface::middle::mir::Body;
 use crate::rustc_interface::middle::mir::BorrowKind;
 use crate::rustc_interface::middle::mir::FakeReadCause;
-use crate::rustc_interface::middle::mir::Local;
-use crate::rustc_interface::middle::mir::LocalDecl;
 use crate::rustc_interface::middle::mir::MutBorrowKind;
 use crate::rustc_interface::middle::mir::Place as MirPlace;
 use crate::rustc_interface::middle::mir::PlaceRef;
@@ -24,15 +23,8 @@ use crate::rustc_interface::middle::ty::RegionKind;
 use crate::rustc_interface::middle::ty::Ty;
 use crate::rustc_interface::middle::ty::TyCtxt;
 
-use pcs::FpcsOutput;
-
 use pcs::free_pcs::CapabilityKind;
-use pcs::free_pcs::PcgBasicBlock;
 use pcs::free_pcs::PcgLocation;
-
-use pcs::combined_pcs::PCGNodeLike;
-
-use pcs::utils::PlaceRepacker;
 
 pub struct BlockMutableBorrow;
 
@@ -93,119 +85,131 @@ impl PeepholeMutator for BlockMutableBorrow {
     //     }
     //     mutably_lent_places
     // }
-    fn generate_mutants<'mir, 'tcx>(
-        tcx: &TyCtxt<'tcx>,
+    fn generate_mutants<'tcx>(
+        tcx: TyCtxt<'tcx>,
         body: &Body<'tcx>,
         curr: &PcgLocation<'tcx>,
         next: &PcgLocation<'tcx>,
     ) -> Vec<Mutant<'tcx>> {
-        let repacker = PlaceRepacker::new(body, *tcx);
+        fn generate_mutant_with_borrow_kind<'tcx>(
+            tcx: TyCtxt<'tcx>,
+            body: &Body<'tcx>,
+            curr: &PcgLocation<'tcx>,
+            lent_place: MirPlace<'tcx>,
+            region: Region<'tcx>,
+            borrow_kind: BorrowKind,
+        ) -> Option<Mutant<'tcx>> {
+            let mut mutant_body = body.clone();
+
+            let borrow_ty =
+                Ty::new_mut_ref(tcx, region, lent_place.ty(&body.local_decls, tcx).ty);
+
+            let fresh_local = fresh_local(&mut mutant_body, borrow_ty);
+
+            let statement_index = curr.location.statement_index;
+
+            let place_live = Statement {
+                source_info: bogus_source_info(&mutant_body),
+                kind: StatementKind::StorageLive(fresh_local),
+            };
+
+            let place_dead = Statement {
+                source_info: bogus_source_info(&mutant_body),
+                kind: StatementKind::StorageDead(fresh_local),
+            };
+
+            let fake_read = Statement {
+                source_info: bogus_source_info(&mutant_body),
+                kind: StatementKind::FakeRead(Box::new((
+                    FakeReadCause::ForLet(None),
+                    MirPlace::from(fresh_local),
+                ))),
+            };
+
+            let place_mention = Statement {
+                source_info: bogus_source_info(&mutant_body),
+                kind: StatementKind::PlaceMention(Box::new(
+                        MirPlace::from(fresh_local))),
+            };
+
+            let new_borrow = Statement {
+                source_info: bogus_source_info(&mutant_body),
+                kind: StatementKind::Assign(Box::new((
+                    MirPlace::from(fresh_local),
+                    Rvalue::Ref(region, borrow_kind, lent_place),
+                ))),
+            };
+
+            let info = format!(
+                "{:?} was mutably lent, so inserted {:?}",
+                lent_place, &new_borrow
+            );
+
+            let bb_index = curr.location.block;
+            let bb = mutant_body.basic_blocks_mut().get_mut(bb_index)?;
+            bb.statements.insert(statement_index + 2, place_dead);
+            bb.statements.insert(statement_index + 2, place_mention);
+            bb.statements.insert(statement_index + 2, fake_read);
+            bb.statements.insert(statement_index, new_borrow);
+            bb.statements.insert(statement_index, place_live);
+
+            let borrow_loc = MutantLocation {
+                basic_block: curr.location.block.index(),
+                statement_index: statement_index,
+            };
+
+            let mention_loc = MutantLocation {
+                basic_block: curr.location.block.index(),
+                statement_index: statement_index + 2,
+            };
+
+            Some(Mutant {
+                body: mutant_body,
+                range: MutantRange {
+                    start: borrow_loc,
+                    end: mention_loc,
+                },
+                info: info,
+            })
+        }
 
         let mutably_lent_in_curr = {
-            let mut owned_lent = {
-                let owned_capabilities = curr.states.post_main();
-                filter_owned_places_by_capability(&owned_capabilities, |ck| {
-                    ck == CapabilityKind::Lent
-                })
-            };
-            let mut borrowed_lent = {
-                let borrows_state = curr.borrows.post_main();
-                let borrow_capabilities = borrows_state.capabilities.as_ref();
-                filter_borrowed_places_by_capability(&borrow_capabilities, |ck| {
-                    ck == CapabilityKind::Lent
-                })
-            };
-            owned_lent.extend(borrowed_lent.drain());
-            owned_lent
+            let borrows_graph = curr.borrows.post_main().graph();
+            borrowed_places(borrows_graph, true).map(|(place, _)| place).collect::<HashSet<_>>()
         };
 
         let mutably_lent_in_next = {
-            let mut owned_lent = {
-                let owned_capabilities = next.states.post_main();
-                filter_owned_places_by_capability(&owned_capabilities, |ck| {
-                    ck == CapabilityKind::Lent
-                })
-            };
-            let mut borrowed_lent = {
-                let borrows_state = next.borrows.post_main();
-                let borrow_capabilities = borrows_state.capabilities.as_ref();
-                filter_borrowed_places_by_capability(&borrow_capabilities, |ck| {
-                    ck == CapabilityKind::Lent
-                })
-            };
-            owned_lent.extend(borrowed_lent.drain());
-            owned_lent
+            let borrows_graph = next.borrows.post_main().graph();
+            borrowed_places(borrows_graph, true)
         };
 
         mutably_lent_in_next
-            .iter()
-            .filter(|place| !mutably_lent_in_curr.contains(place))
-            .flat_map(|place| {
-                // for each mutably lent place, seek to the statement at which it becomes exclusive (read?) again, if that location exists
-                // and insert a placemention to extend the borrow
-
-                let lent_place = PlaceRef::from(**place).to_place(*tcx);
-                let mut mutant_body = body.clone();
-
-                let erased_region = Region::new_from_kind(*tcx, RegionKind::ReErased);
-                let borrow_ty = Ty::new_mut_ref(
-                    *tcx,
-                    erased_region,
-                    lent_place.ty(&body.local_decls, *tcx).ty,
-                );
-
-                let fresh_local = fresh_local(&mut mutant_body, borrow_ty);
-
-                let statement_index = curr.location.statement_index;
-
-                let mention_place = Statement {
-                    source_info: bogus_source_info(&mutant_body),
-                    kind: StatementKind::FakeRead(Box::new((
-                        FakeReadCause::ForLet(None),
-                        MirPlace::from(fresh_local),
-                    ))),
-                };
-
-                let default_mut_borrow = BorrowKind::Mut {
-                    kind: MutBorrowKind::Default,
-                };
-                let new_borrow = Statement {
-                    source_info: bogus_source_info(&mutant_body),
-                    kind: StatementKind::Assign(Box::new((
-                        MirPlace::from(fresh_local),
-                        Rvalue::Ref(erased_region, default_mut_borrow, lent_place),
-                    ))),
-                };
-                let info = format!(
-                    "{:?} was mutably lent, so inserted {:?}",
-                    lent_place, &new_borrow
-                );
-
-                let bb_index = curr.location.block;
-                let bb = mutant_body.basic_blocks_mut().get_mut(bb_index)?;
-                bb.statements.insert(statement_index + 2, mention_place);
-                bb.statements.insert(statement_index, new_borrow);
-
-                // TODO also emit mutant w/ immutable reference to place
-
-                let borrow_loc = MutantLocation {
-                    basic_block: curr.location.block.index(),
-                    statement_index: statement_index,
-                };
-
-                let mention_loc = MutantLocation {
-                    basic_block: curr.location.block.index(),
-                    statement_index: statement_index + 2,
-                };
-
-                Some(Mutant {
-                    body: mutant_body,
-                    range: MutantRange {
-                        start: borrow_loc,
-                        end: mention_loc,
-                    },
-                    info: info,
-                })
+            .filter(|(place, _)| !mutably_lent_in_curr.contains(place))
+            .flat_map(|(place, region)| {
+                let lent_place = PlaceRef::from(*place).to_place(tcx);
+                vec![
+                    generate_mutant_with_borrow_kind(
+                        tcx,
+                        body,
+                        curr,
+                        lent_place,
+                        region,
+                        BorrowKind::Shared,
+                    ),
+                    generate_mutant_with_borrow_kind(
+                        tcx,
+                        body,
+                        curr,
+                        lent_place,
+                        region,
+                        BorrowKind::Mut {
+                            kind: MutBorrowKind::Default,
+                        },
+                    ),
+                ]
+                .drain(..)
+                .flatten()
+                .collect::<Vec<_>>()
             })
             .collect()
     }

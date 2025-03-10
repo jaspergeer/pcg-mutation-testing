@@ -28,7 +28,7 @@ pub struct Mutant<'tcx> {
 pub trait Mutator {
     fn generate_mutants<'mir, 'tcx>(
         &mut self,
-        tcx: &TyCtxt<'tcx>,
+        tcx: TyCtxt<'tcx>,
         analysis: &mut FpcsOutput<'mir, 'tcx>,
         body: &Body<'tcx>,
     ) -> Vec<Mutant<'tcx>>;
@@ -37,8 +37,8 @@ pub trait Mutator {
 }
 
 pub trait PeepholeMutator {
-    fn generate_mutants<'mir, 'tcx>(
-        tcx: &TyCtxt<'tcx>,
+    fn generate_mutants<'tcx>(
+        tcx: TyCtxt<'tcx>,
         body: &Body<'tcx>,
         curr: &PcgLocation<'tcx>,
         next: &PcgLocation<'tcx>,
@@ -50,7 +50,7 @@ pub trait PeepholeMutator {
 impl<T: PeepholeMutator> Mutator for T {
     fn generate_mutants<'mir, 'tcx>(
         &mut self,
-        tcx: &TyCtxt<'tcx>,
+        tcx: TyCtxt<'tcx>,
         analysis: &mut FpcsOutput<'mir, 'tcx>,
         body: &Body<'tcx>,
     ) -> Vec<Mutant<'tcx>> {

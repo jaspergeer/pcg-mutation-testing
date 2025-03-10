@@ -7,7 +7,6 @@ use pcg_evaluation::mutator::Mutator;
 use pcg_evaluation::mutator::block_mutable_borrow::BlockMutableBorrow;
 use pcg_evaluation::mutator::mutably_lend_shared::MutablyLendShared;
 use pcg_evaluation::mutator::read_from_write::ReadFromWriteOnly;
-use pcg_evaluation::mutator::share_mutably_lent::ShareMutablyLent;
 use pcg_evaluation::mutator::write_to_borrowed::WriteToBorrowed;
 use pcg_evaluation::mutator::write_to_read::WriteToReadOnly;
 
@@ -116,6 +115,85 @@ fn set_mir_borrowck(_session: &Session, providers: &mut Providers) {
     providers.mir_borrowck = mir_borrowck;
 }
 
+fn run_pcg_on_all_fns<'mir, 'tcx>(
+    body_map: &'mir HashMap<LocalDefId, BodyWithBorrowckFacts<'tcx>>,
+    tcx: TyCtxt<'tcx>,
+) {
+    if std::env::var("CARGO_CRATE_NAME").is_ok() && std::env::var("CARGO_PRIMARY_PACKAGE").is_err()
+    {
+        // We're running in cargo, but the Rust file is a dependency (not part of the primary package)
+
+        // For now we don't check dependencies, so we abort
+
+        return;
+    }
+
+    let user_specified_vis_dir = std::env::var("PCG_VISUALIZATION_DATA_DIR");
+
+    let vis_dir: Option<&str> = if env_feature_enabled("PCG_VISUALIZATION").unwrap_or(false) {
+        Some(match user_specified_vis_dir.as_ref() {
+            Ok(dir) => dir,
+
+            Err(_) => "visualization/data",
+        })
+    } else {
+        None
+    };
+
+    if let Some(path) = &vis_dir {
+        if std::path::Path::new(path).exists() {
+            std::fs::remove_dir_all(path)
+                .expect("Failed to delete visualization directory contents");
+        }
+
+        std::fs::create_dir_all(path).expect("Failed to create visualization directory");
+    }
+
+    let mut item_names = vec![];
+    for def_id in tcx.hir().body_owners() {
+        let kind = tcx.def_kind(def_id);
+
+        match kind {
+            hir::def::DefKind::Fn | hir::def::DefKind::AssocFn => {
+                let item_name = format!("{}", tcx.def_path_str(def_id.to_def_id()));
+
+                if let Some(body) = body_map.get(&def_id) {
+                    let safety = tcx.fn_sig(def_id).skip_binder().safety();
+
+                    if safety == hir::Safety::Unsafe {
+                        continue;
+                    }
+
+                    let output = run_combined_pcs(
+                        body,
+                        tcx,
+                        vis_dir.map(|dir| format!("{}/{}", dir, item_name)),
+                    );
+                    item_names.push(item_name);
+                }
+            }
+
+            unsupported_item_kind => {
+                eprintln!("Unsupported item: {unsupported_item_kind:?}");
+            }
+        }
+    }
+    if let Some(dir_path) = &vis_dir {
+        let file_path = format!("{}/functions.json", dir_path);
+
+        let json_data = serde_json::to_string(
+            &item_names
+                .iter()
+                .map(|name| (name.clone(), name.clone()))
+                .collect::<std::collections::HashMap<_, _>>(),
+        )
+        .expect("Failed to serialize item names to JSON");
+        let mut file = File::create(file_path).expect("Failed to create JSON file");
+        file.write_all(json_data.as_bytes())
+            .expect("Failed to write item names to JSON file");
+    }
+}
+
 // TODO interleave pcg generation and mutation testing
 fn run_mutation_tests<'tcx>(
     tcx: TyCtxt<'tcx>,
@@ -129,22 +207,25 @@ fn run_mutation_tests<'tcx>(
         mutators: &mut Vec<Box<dyn Mutator + Send>>,
         mutants_log: &mut IndexMap<String, LogEntry>,
         mutator_results: &mut HashMap<String, MutatorData>,
+        passed_bodies: &mut HashMap<LocalDefId, BodyWithBorrowckFacts<'tcx>>,
         def_id: LocalDefId,
         body_with_borrowck_facts: &BodyWithBorrowckFacts<'tcx>,
         mut analysis: FpcsOutput<'mir, 'tcx>,
     ) {
         for mutator in mutators.iter_mut() {
-            let mut mutator_data = MutatorData {
-                instances: 0,
-                passed: 0,
-                failed: 0,
-            };
+            let mut mutator_data = mutator_results
+                .entry(mutator.name())
+                .or_insert(MutatorData {
+                    instances: 0,
+                    passed: 0,
+                    failed: 0,
+                });
             eprintln!("working dir {}", std::env::current_dir().unwrap().display());
             let body = &body_with_borrowck_facts.body;
             let promoted = &body_with_borrowck_facts.promoted;
 
             let (numerator, denominator) = mutator.run_ratio();
-            let mutants = mutator.generate_mutants(&tcx, &mut analysis, &body);
+            let mutants = mutator.generate_mutants(tcx, &mut analysis, &body);
 
             eprintln!("running mutator for {:?}", &def_id);
             for Mutant { body, range, info } in mutants {
@@ -172,6 +253,18 @@ fn run_mutation_tests<'tcx>(
                         }
                     } else {
                         mutator_data.passed += 1;
+                        let mutant_body_with_borrowck_facts = BodyWithBorrowckFacts {
+                            body: body,
+                            promoted: body_with_borrowck_facts.promoted.clone(),
+                            borrow_set: body_with_borrowck_facts.borrow_set.clone(),
+                            region_inference_context: body_with_borrowck_facts
+                                .region_inference_context
+                                .clone(),
+                            location_table: body_with_borrowck_facts.location_table.clone(),
+                            input_facts: body_with_borrowck_facts.input_facts.clone(),
+                            output_facts: body_with_borrowck_facts.output_facts.clone(),
+                        };
+                        passed_bodies.insert(def_id, mutant_body_with_borrowck_facts);
                         BorrowCheckInfo::Passed
                     }
                 } else {
@@ -187,12 +280,12 @@ fn run_mutation_tests<'tcx>(
                 mutants_log.insert(mutants_log.len().to_string(), log_entry);
                 compiler.sess.dcx().reset_err_count(); // cursed
             }
-            mutator_results.insert(mutator.name(), mutator_data);
         }
     }
 
     let mut mutator_results = HashMap::new();
     let mut mutants_log = IndexMap::new();
+    let mut passed_bodies = HashMap::new();
 
     let body_map: HashMap<LocalDefId, BodyWithBorrowckFacts<'tcx>> =
         unsafe { std::mem::transmute(BODIES.take()) };
@@ -217,6 +310,7 @@ fn run_mutation_tests<'tcx>(
                     mutators,
                     &mut mutants_log,
                     &mut mutator_results,
+                    &mut passed_bodies,
                     def_id,
                     body_with_borrowck_facts,
                     analysis,
@@ -227,6 +321,8 @@ fn run_mutation_tests<'tcx>(
             }
         }
     }
+
+    run_pcg_on_all_fns(&passed_bodies, tcx);
 
     let crate_name = tcx.crate_name(CrateNum::from_usize(0)).to_string();
 
@@ -295,7 +391,7 @@ fn main() {
     if !std::env::args().any(|arg| arg.starts_with("--edition=")) {
         rustc_args.push("--edition=2018".to_string());
         // TODO add polonius option
-        rustc_args.push("-Zpolonius".to_string());
+        // rustc_args.push("-Zpolonius".to_string());
     }
 
     let results_dir = match std::env::var("RESULTS_DIR") {
@@ -311,7 +407,6 @@ fn main() {
             Box::new(ReadFromWriteOnly),
             Box::new(WriteToReadOnly),
             Box::new(WriteToBorrowed),
-            Box::new(ShareMutablyLent),
         ],
         results_dir: results_dir,
     };
