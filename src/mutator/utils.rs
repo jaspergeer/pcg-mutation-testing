@@ -27,6 +27,7 @@ use crate::rustc_interface::middle::ty::TyCtxt;
 use crate::rustc_interface::middle::ty::Ty;
 
 use crate::rustc_interface::middle::mir::Body;
+use crate::rustc_interface::middle::mir::BorrowKind;
 use crate::rustc_interface::middle::mir::Local;
 use crate::rustc_interface::middle::mir::LocalDecl;
 use crate::rustc_interface::middle::mir::BasicBlock;
@@ -119,21 +120,36 @@ pub(crate) fn bogus_source_info<'tcx>(body: &Body<'tcx>) -> SourceInfo {
     body.local_decls.iter().next().unwrap().source_info
 }
 
+pub(crate) fn is_mut(kind: BorrowKind) -> bool {
+    match kind {
+        BorrowKind::Mut { .. } => true,
+        _ => false
+    }
+}
+
+pub(crate) fn is_shared(kind: BorrowKind) -> bool {
+    match kind {
+        BorrowKind::Shared => true,
+        _ => false
+    }
+}
+
 pub(crate) fn borrowed_places<'graph, 'tcx>(
     graph: &'graph BorrowsGraph<'tcx>,
-    mutable: bool,
+    p: fn(BorrowKind) -> bool,
 ) -> impl Iterator<Item = (Place<'tcx>, Region<'tcx>)> + 'graph {
     graph.edges().flat_map(move |edge_ref| match edge_ref.kind() {
         BorrowPCGEdgeKind::Borrow(borrow_edge) =>
             match borrow_edge {
-                BorrowEdge::Local(local_borrow) =>
-                  if local_borrow.is_mut() == mutable {
-                    let place = maybe_old_place_to_current_place(local_borrow.blocked_place)?;
-                    let region = local_borrow.region;
-                    Some((place, region))
-                  } else {
-                      None
-                  },
+                BorrowEdge::Local(local_borrow) => {
+                    if borrow_edge.kind().iter().any(|kind| p(*kind)) {
+                        let place = maybe_old_place_to_current_place(local_borrow.blocked_place)?;
+                        let region = local_borrow.region;
+                        Some((place, region))
+                    } else {
+                        None
+                    }
+                },
                 _ => None
             },
         _ => None

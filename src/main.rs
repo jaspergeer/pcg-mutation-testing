@@ -6,9 +6,11 @@ use pcg_evaluation::mutator::Mutator;
 
 use pcg_evaluation::mutator::block_mutable_borrow::BlockMutableBorrow;
 use pcg_evaluation::mutator::mutably_lend_shared::MutablyLendShared;
+use pcg_evaluation::mutator::mutably_lend_read::MutablyLendReadOnly;
 use pcg_evaluation::mutator::read_from_write::ReadFromWriteOnly;
-use pcg_evaluation::mutator::write_to_borrowed::WriteToBorrowed;
+use pcg_evaluation::mutator::write_to_shared::WriteToShared;
 use pcg_evaluation::mutator::write_to_read::WriteToReadOnly;
+use pcg_evaluation::mutator::move_from_borrowed::MoveFromBorrowed;
 
 use pcg_evaluation::utils::env_feature_enabled;
 
@@ -87,6 +89,7 @@ struct MutatorData {
     instances: i64,
     passed: i64,
     failed: i64,
+    error_codes: HashSet<String>,
 }
 
 struct MutatorCallbacks {
@@ -95,8 +98,11 @@ struct MutatorCallbacks {
 }
 
 fn mir_borrowck<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> ProvidedValue<'tcx> {
-    let consumer_opts = consumers::ConsumerOptions::PoloniusInputFacts;
-    let body_with_facts = consumers::get_body_with_borrowck_facts(tcx, def_id, consumer_opts);
+    let body_with_facts = {
+        let consumer_opts = consumers::ConsumerOptions::PoloniusInputFacts;
+        consumers::get_body_with_borrowck_facts(tcx, def_id, consumer_opts)
+    };
+    // eprintln!("{:?}", &body_with_facts.body);
     unsafe {
         let body: BodyWithBorrowckFacts<'tcx> = body_with_facts.into();
         let body: BodyWithBorrowckFacts<'static> = std::mem::transmute(body);
@@ -219,6 +225,7 @@ fn run_mutation_tests<'tcx>(
                     instances: 0,
                     passed: 0,
                     failed: 0,
+                    error_codes: HashSet::new(),
                 });
             eprintln!("working dir {}", std::env::current_dir().unwrap().display());
             let body = &body_with_borrowck_facts.body;
@@ -240,11 +247,16 @@ fn run_mutation_tests<'tcx>(
                     );
                     track_body_error_codes(def_id);
 
-                    let (borrowck_result, _) =
-                        borrowck::do_mir_borrowck(tcx, &body, &promoted, None);
+                    let (borrowck_result, mutant_body_with_borrowck_facts) = {
+                        let consumer_opts = consumers::ConsumerOptions::PoloniusInputFacts;
+                        borrowck::do_mir_borrowck(tcx, &body, &promoted, Some(consumer_opts))
+                    };
                     if let Some(_) = borrowck_result.tainted_by_errors {
                         mutator_data.failed += 1;
                         let error_codes = get_registered_errors();
+                        for error_code in error_codes.iter() {
+                            mutator_data.error_codes.insert(error_code.to_string());
+                        }
                         BorrowCheckInfo::Failed {
                             error_codes: error_codes
                                 .iter()
@@ -253,18 +265,7 @@ fn run_mutation_tests<'tcx>(
                         }
                     } else {
                         mutator_data.passed += 1;
-                        let mutant_body_with_borrowck_facts = BodyWithBorrowckFacts {
-                            body: body,
-                            promoted: body_with_borrowck_facts.promoted.clone(),
-                            borrow_set: body_with_borrowck_facts.borrow_set.clone(),
-                            region_inference_context: body_with_borrowck_facts
-                                .region_inference_context
-                                .clone(),
-                            location_table: body_with_borrowck_facts.location_table.clone(),
-                            input_facts: body_with_borrowck_facts.input_facts.clone(),
-                            output_facts: body_with_borrowck_facts.output_facts.clone(),
-                        };
-                        passed_bodies.insert(def_id, mutant_body_with_borrowck_facts);
+                        passed_bodies.insert(def_id, (*mutant_body_with_borrowck_facts.unwrap()).into());
                         BorrowCheckInfo::Passed
                     }
                 } else {
@@ -406,7 +407,9 @@ fn main() {
             Box::new(MutablyLendShared),
             Box::new(ReadFromWriteOnly),
             Box::new(WriteToReadOnly),
-            Box::new(WriteToBorrowed),
+            Box::new(WriteToShared),
+            Box::new(MoveFromBorrowed),
+            Box::new(MutablyLendReadOnly),
         ],
         results_dir: results_dir,
     };

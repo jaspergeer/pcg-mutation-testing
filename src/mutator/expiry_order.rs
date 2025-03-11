@@ -28,9 +28,70 @@ use crate::rustc_interface::middle::ty::TyCtxt;
 use pcs::free_pcs::CapabilityKind;
 use pcs::free_pcs::PcgLocation;
 
-pub struct BlockMutableBorrow;
+pub struct ExpiryOrder;
 
-impl PeepholeMutator for BlockMutableBorrow {
+impl PeepholeMutator for ExpiryOrder {
+    // fn mutably_lent_places<'mir, 'tcx>(
+    //     borrows_state: &BorrowsState<'tcx>,
+    //     owned_capabilities: &CapabilitySummary<'tcx>,
+    //     repacker: &PlaceRepacker<'mir, 'tcx>,
+    // ) -> HashSet<Place<'tcx>> {
+    //     let graph = borrows_state.graph();
+    //     let leaf_edges = graph.frozen_graph().leaf_edges(*repacker);
+
+    //     let mut to_visit = leaf_edges
+    //         .iter()
+    //         .flat_map(|edge| match edge.kind() {
+    //             BorrowPCGEdgeKind::Borrow(borrow_edge) => {
+    //                 if borrow_edge.is_mut() {
+    //                     edge.blocked_nodes(*repacker)
+    //                 } else {
+    //                     FxHashSet::default()
+    //                 }
+    //             }
+    //             _ => FxHashSet::default(),
+    //         })
+    //         .collect::<VecDeque<_>>();
+
+    //     let mut visited = HashSet::new();
+    //     let mut mutably_lent_places = HashSet::new();
+
+    //     while let Some(curr) = to_visit.pop_front() {
+    //         if !visited.contains(&curr) {
+    //             if let Some(place) = pcg_node_to_current_place(curr) {
+    //                 if let Some(capability) = borrows_state.get_capability(curr) {
+    //                     if let CapabilityKind::Lent = capability {
+    //                         mutably_lent_places.insert(place);
+    //                     }
+    //                 } else if let Some(local_capability) = owned_capabilities.get(place.local) {
+    //                     if let CapabilityLocal::Allocated(projections) = local_capability {
+    //                         if let Some(capability) = projections.get(&place) {
+    //                             if let CapabilityKind::Lent = capability {
+    //                                 mutably_lent_places.insert(place);
+    //                             }
+    //                         }
+    //                     }
+    //                 }
+    //             }
+
+    //             if let Some(local_node) = curr.try_to_local_node() {
+    //                 let children = graph
+    //                     .edges_blocked_by(local_node, *repacker)
+    //                     .flat_map(|edge| edge.blocked_nodes(*repacker));
+    //                 for child in children {
+    //                     to_visit.push_back(child);
+    //                 }
+    //                 visited.insert(curr);
+    //             }
+    //         }
+    //     }
+    //     mutably_lent_places
+    // }
+    //
+    //
+    // TODO create a sequence that expires borrows in topological order
+    // then, for each place in the chain, place an access in an illegal position in the sequence
+
     fn generate_mutants<'tcx>(
         tcx: TyCtxt<'tcx>,
         body: &Body<'tcx>,
@@ -45,6 +106,10 @@ impl PeepholeMutator for BlockMutableBorrow {
             region: Region<'tcx>,
             borrow_kind: BorrowKind,
         ) -> Option<Mutant<'tcx>> {
+            match region.kind() {
+                RegionKind::ReVar(region_vid) => eprintln!("VID {:?}", region_vid),
+                _ => ()
+            }
             let mut mutant_body = body.clone();
             let region = Region::new_var(tcx, RegionVid::MAX);
 
@@ -167,6 +232,6 @@ impl PeepholeMutator for BlockMutableBorrow {
     }
 
     fn name(&mut self) -> String {
-        "block-mutable-borrow".into()
+        "expiry-order".into()
     }
 }

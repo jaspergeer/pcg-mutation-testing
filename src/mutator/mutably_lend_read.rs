@@ -1,6 +1,7 @@
-use super::utils::fresh_local;
+use super::utils::filter_borrowed_places_by_capability;
+use super::utils::filter_owned_places_by_capability;
 use super::utils::borrowed_places;
-use super::utils::is_shared;
+use super::utils::fresh_local;
 
 use std::collections::HashSet;
 
@@ -11,13 +12,16 @@ use super::mutator_impl::PeepholeMutator;
 
 use crate::rustc_interface::middle::mir::Body;
 use crate::rustc_interface::middle::mir::BorrowKind;
+use crate::rustc_interface::middle::mir::FakeReadCause;
 use crate::rustc_interface::middle::mir::MutBorrowKind;
+use crate::rustc_interface::middle::mir::Operand;
 use crate::rustc_interface::middle::mir::Place as MirPlace;
 use crate::rustc_interface::middle::mir::PlaceRef;
 use crate::rustc_interface::middle::mir::Rvalue;
 use crate::rustc_interface::middle::mir::Statement;
 use crate::rustc_interface::middle::mir::StatementKind;
 use crate::rustc_interface::middle::ty::Region;
+use crate::rustc_interface::middle::ty::RegionVid;
 use crate::rustc_interface::middle::ty::RegionKind;
 use crate::rustc_interface::middle::ty::Ty;
 use crate::rustc_interface::middle::ty::TyCtxt;
@@ -25,38 +29,59 @@ use crate::rustc_interface::middle::ty::TyCtxt;
 use pcs::free_pcs::CapabilityKind;
 use pcs::free_pcs::PcgLocation;
 
-pub struct MutablyLendShared;
+pub struct MutablyLendReadOnly;
 
-impl PeepholeMutator for MutablyLendShared {
+impl PeepholeMutator for MutablyLendReadOnly {
     fn generate_mutants<'tcx>(
         tcx: TyCtxt<'tcx>,
         body: &Body<'tcx>,
         curr: &PcgLocation<'tcx>,
         next: &PcgLocation<'tcx>,
     ) -> Vec<Mutant<'tcx>> {
-        let immutably_lent_in_curr = {
-            let borrows_graph = curr.borrows.post_main().graph();
-            borrowed_places(borrows_graph, is_shared)
+        let read_only_in_curr = {
+            let borrows_state = curr.borrows.post_main();
+            let mut owned_read = {
+                let owned_capabilities = curr.states.post_main();
+                filter_owned_places_by_capability(&owned_capabilities, |ck| ck == CapabilityKind::Read)
+            };
+            let mut borrowed_read = {
+                let borrow_capabilities = borrows_state.capabilities();
+                filter_borrowed_places_by_capability(&borrow_capabilities, |ck| ck == CapabilityKind::Read)
+            };
+            owned_read.extend(borrowed_read.drain());
+            owned_read
         };
 
-        let immutably_lent_in_next = {
-            let borrows_graph = next.borrows.post_main().graph();
-            borrowed_places(borrows_graph, is_shared).map(|(place, _)| place).collect::<HashSet<_>>()
+        let read_only_in_next = {
+            let borrows_state = next.borrows.post_main();
+            let mut owned_read = {
+                let owned_capabilities = next.states.post_main();
+                filter_owned_places_by_capability(&owned_capabilities, |ck| ck == CapabilityKind::Read)
+            };
+            let mut borrowed_read = {
+                let borrow_capabilities = borrows_state.capabilities();
+                filter_borrowed_places_by_capability(borrow_capabilities, |ck| ck == CapabilityKind::Read)
+            };
+            owned_read.extend(borrowed_read.drain());
+            owned_read
         };
 
-        immutably_lent_in_curr
-            .filter(|(place, _)| immutably_lent_in_next.contains(place))
-            .flat_map(|(place, region)| {
-                let lent_place = PlaceRef::from(*place).to_place(tcx);
+        read_only_in_curr
+            .iter()
+            .filter(|place| read_only_in_next.contains(place))
+            .flat_map(|place| {
                 let mut mutant_body = body.clone();
+                let region = Region::new_var(tcx, RegionVid::MAX);
 
-                let borrow_ty = Ty::new_mut_ref(
+                let read_only_place = PlaceRef::from(**place).to_place(tcx);
+
+                let read_only_place_ty = Ty::new_mut_ref(
                     tcx,
                     region,
-                    lent_place.ty(&body.local_decls, tcx).ty,
+                    read_only_place.ty(&body.local_decls, tcx).ty,
                 );
 
-                let fresh_local = fresh_local(&mut mutant_body, borrow_ty);
+                let fresh_local = fresh_local(&mut mutant_body, read_only_place_ty);
 
                 let statement_index = curr.location.statement_index;
                 let bb_index = curr.location.block;
@@ -70,12 +95,12 @@ impl PeepholeMutator for MutablyLendShared {
                     source_info: statement_source_info,
                     kind: StatementKind::Assign(Box::new((
                         MirPlace::from(fresh_local),
-                        Rvalue::Ref(region, default_mut_borrow, lent_place),
+                        Rvalue::Ref(region, default_mut_borrow, read_only_place),
                     ))),
                 };
                 let info = format!(
-                    "{:?} was immutably lent, so inserted {:?}",
-                    lent_place, &new_borrow
+                    "{:?} was read-only, so inserted {:?}",
+                    read_only_place, &new_borrow
                 );
                 bb.statements.insert(statement_index + 1, new_borrow);
 
@@ -101,6 +126,6 @@ impl PeepholeMutator for MutablyLendShared {
     }
 
     fn name(&mut self) -> String {
-        "mutably-lend-shared".into()
+        "mutably-lend-read".into()
     }
 }

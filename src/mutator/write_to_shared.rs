@@ -1,5 +1,6 @@
 use super::utils::bogus_source_info;
 use super::utils::borrowed_places;
+use super::utils::is_shared;
 
 use std::collections::HashSet;
 
@@ -18,9 +19,9 @@ use crate::rustc_interface::middle::ty::TyCtxt;
 use pcs::free_pcs::CapabilityKind;
 use pcs::free_pcs::PcgLocation;
 
-pub struct WriteToBorrowed;
+pub struct WriteToShared;
 
-impl PeepholeMutator for WriteToBorrowed {
+impl PeepholeMutator for WriteToShared {
     fn generate_mutants<'tcx>(
         tcx: TyCtxt<'tcx>,
         body: &Body<'tcx>,
@@ -29,12 +30,12 @@ impl PeepholeMutator for WriteToBorrowed {
     ) -> Vec<Mutant<'tcx>> {
         let shared_in_curr = {
             let borrows_graph = curr.borrows.post_main().graph();
-            borrowed_places(borrows_graph, false).map(|(place, _)| place).collect::<HashSet<_>>()
+            borrowed_places(borrows_graph, is_shared).map(|(place, _)| place).collect::<HashSet<_>>()
         };
 
         let shared_in_next = {
             let borrows_graph = next.borrows.post_main().graph();
-            borrowed_places(borrows_graph, false)
+            borrowed_places(borrows_graph, is_shared)
         };
 
         shared_in_next
@@ -90,6 +91,6 @@ impl PeepholeMutator for WriteToBorrowed {
     }
 
     fn name(&mut self) -> String {
-        "use-borrowed".into()
+        "write-to-shared".into()
     }
 }
