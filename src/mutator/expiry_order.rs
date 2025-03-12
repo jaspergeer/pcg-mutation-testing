@@ -54,64 +54,6 @@ use pcs::borrow_pcg::region_projection::RegionProjection;
 pub struct ExpiryOrder;
 
 impl PeepholeMutator for ExpiryOrder {
-    // fn mutably_lent_places<'mir, 'tcx>(
-    //     borrows_state: &BorrowsState<'tcx>,
-    //     owned_capabilities: &CapabilitySummary<'tcx>,
-    //     repacker: &PlaceRepacker<'mir, 'tcx>,
-    // ) -> HashSet<Place<'tcx>> {
-    //     let graph = borrows_state.graph();
-    //     let leaf_edges = graph.frozen_graph().leaf_edges(*repacker);
-
-    //     let mut to_visit = leaf_edges
-    //         .iter()
-    //         .flat_map(|edge| match edge.kind() {
-    //             BorrowPCGEdgeKind::Borrow(borrow_edge) => {
-    //                 if borrow_edge.is_mut() {
-    //                     edge.blocked_nodes(*repacker)
-    //                 } else {
-    //                     FxHashSet::default()
-    //                 }
-    //             }
-    //             _ => FxHashSet::default(),
-    //         })
-    //         .collect::<VecDeque<_>>();
-
-    //     let mut visited = HashSet::new();
-    //     let mut mutably_lent_places = HashSet::new();
-
-    //     while let Some(curr) = to_visit.pop_front() {
-    //         if !visited.contains(&curr) {
-    //             if let Some(place) = pcg_node_to_current_place(curr) {
-    //                 if let Some(capability) = borrows_state.get_capability(curr) {
-    //                     if let CapabilityKind::Lent = capability {
-    //                         mutably_lent_places.insert(place);
-    //                     }
-    //                 } else if let Some(local_capability) = owned_capabilities.get(place.local) {
-    //                     if let CapabilityLocal::Allocated(projections) = local_capability {
-    //                         if let Some(capability) = projections.get(&place) {
-    //                             if let CapabilityKind::Lent = capability {
-    //                                 mutably_lent_places.insert(place);
-    //                             }
-    //                         }
-    //                     }
-    //                 }
-    //             }
-
-    //             if let Some(local_node) = curr.try_to_local_node() {
-    //                 let children = graph
-    //                     .edges_blocked_by(local_node, *repacker)
-    //                     .flat_map(|edge| edge.blocked_nodes(*repacker));
-    //                 for child in children {
-    //                     to_visit.push_back(child);
-    //                 }
-    //                 visited.insert(curr);
-    //             }
-    //         }
-    //     }
-    //     mutably_lent_places
-    // }
-    //
-    //
     // TODO create a sequence that expires borrows in topological order
     // then, for each place in the chain, place an access in an illegal position in the sequence
 
@@ -138,15 +80,16 @@ impl PeepholeMutator for ExpiryOrder {
                 .collect();
 
             let mut place_depths: HashMap<Place<'_>, usize> = HashMap::new();
-
             let mut max_depth = 0;
+
             while let Some((curr, depth)) = to_visit.pop_front() {
                 match curr {
                     PCGNode::RegionProjection(mut region_projection) =>
                         for maybe_old_place in region_projection.pcg_elems().iter() {
                             if let MaybeOldPlace::Current { place } = maybe_old_place {
                                 if place_depths.get(place).iter().all(|place_depth| **place_depth < depth) {
-                                    place_depths.insert(*place, depth);
+                                    // TODO PROBLEM CHILD
+                                    // place_depths.insert(*place, depth);
                                     max_depth = std::cmp::max(max_depth, depth);
                                 }
                             }
@@ -259,10 +202,15 @@ impl PeepholeMutator for ExpiryOrder {
         ) -> Vec<Statement<'tcx>> {
             places.map(|place| {
                 let mir_place = PlaceRef::from(*place).to_place(tcx);
-                let target = fresh_local(body, mir_place.ty(&body.local_decls, tcx).ty);
                 let region = Region::new_var(tcx, RegionVid::MAX);
+                let target_ty =
+                    Ty::new_mut_ref(tcx, region, mir_place.ty(&body.local_decls, tcx).ty);
+                let target = fresh_local(body, target_ty);
                 Statement {
                     source_info: bogus_source_info(body),
+                    // kind: StatementKind::PlaceMention(Box::new(
+                    //     mir_place
+                    // ))
                     kind: StatementKind::Assign(Box::new((
                         MirPlace::from(target),
                         Rvalue::Ref(region, BorrowKind::Shared, mir_place)
@@ -283,10 +231,6 @@ impl PeepholeMutator for ExpiryOrder {
         // alternatively, we can top sort with a random seed and mutate from there?
 
 
-        // let mutant_bb = BasicBlockData::new(
-        //     None
-        // );
-
         let repacker = PlaceRepacker::new(&body, tcx);
         let borrows_graph = next.borrows.post_operands().graph();
         let expiry_sequence: Vec<_> = {
@@ -294,7 +238,7 @@ impl PeepholeMutator for ExpiryOrder {
             expiry_order.drain(..).flatten().collect()
         };
 
-        eprintln!("expiry sequence{:?}", &expiry_sequence);
+        // eprintln!("expiry sequence{:?}", &expiry_sequence);
         let mut mutant_sequences = vec![];
         for i in 0..expiry_sequence.len() {
             let blocking_places = places_blocking(expiry_sequence[i], &borrows_graph, repacker);
@@ -314,7 +258,6 @@ impl PeepholeMutator for ExpiryOrder {
             }
         }
 
-        eprintln!("mutant sequences: {:?}", &mutant_sequences);
         mutant_sequences.drain(..).map(|(mutant_sequence, mut mutant_body)| {
             let curr_bb_index = curr.location.block;
             let bb = mutant_body.basic_blocks_mut().get_mut(curr_bb_index).unwrap();
@@ -334,7 +277,8 @@ impl PeepholeMutator for ExpiryOrder {
             mutant_bb.statements = mutant_sequence;
             mutant_bb.terminator = Some(Terminator {
                 source_info: bogus_source_info,
-                kind: TerminatorKind::Return
+                // kind: TerminatorKind::Return
+                kind: TerminatorKind::Unreachable
             });
 
             let start_loc = MutantLocation {
@@ -344,7 +288,7 @@ impl PeepholeMutator for ExpiryOrder {
 
             let end_loc = MutantLocation {
                 basic_block: mutant_bb_index.into(),
-                statement_index: mutant_bb.statements.len() - 1,
+                statement_index: mutant_bb.statements.len(),
             };
 
             let bb = mutant_body.basic_blocks_mut().get_mut(curr_bb_index).unwrap();
@@ -362,7 +306,7 @@ impl PeepholeMutator for ExpiryOrder {
                     start: start_loc,
                     end: end_loc,
                 },
-                info: "todo".to_string(),
+                info: format!("created new basic block {:?}", mutant_bb_index).to_string(),
             }
         }).collect()
     }

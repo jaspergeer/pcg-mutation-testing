@@ -38,6 +38,7 @@ use pcg_evaluation::rustc_interface::middle::util::Providers;
 
 use pcg_evaluation::rustc_interface::session::Session;
 
+use pcg_evaluation::rustc_interface::driver::catch_fatal_errors;
 use pcg_evaluation::rustc_interface::driver::Callbacks;
 use pcg_evaluation::rustc_interface::driver::DEFAULT_LOCALE_RESOURCES;
 
@@ -239,48 +240,50 @@ fn run_mutation_tests<'tcx>(
             for Mutant { body, range, info } in mutants {
                 mutator_data.instances += 1;
                 let do_borrowck = env_feature_enabled("DO_BORROWCK").unwrap_or(true);
-                let borrow_check_info = if rand::random_ratio(numerator, denominator) && do_borrowck
-                {
-                    eprintln!(
-                        "mutant at {} in {:?}",
-                        serde_json::to_value(&range).unwrap(),
-                        def_id
-                    );
-                    track_body_error_codes(def_id);
+                catch_fatal_errors(|| {
+                    let borrow_check_info = if rand::random_ratio(numerator, denominator) && do_borrowck
+                    {
+                        eprintln!(
+                            "mutant at {} in {:?}",
+                            serde_json::to_value(&range).unwrap(),
+                            def_id
+                        );
+                        track_body_error_codes(def_id);
 
-                    let (borrowck_result, mutant_body_with_borrowck_facts) = {
-                        let consumer_opts = consumers::ConsumerOptions::PoloniusInputFacts;
-                        borrowck::do_mir_borrowck(tcx, &body, &promoted, Some(consumer_opts))
-                    };
-                    if let Some(_) = borrowck_result.tainted_by_errors {
-                        mutator_data.failed += 1;
-                        let error_codes = get_registered_errors();
-                        for error_code in error_codes.iter() {
-                            mutator_data.error_codes.insert(error_code.to_string());
-                        }
-                        BorrowCheckInfo::Failed {
-                            error_codes: error_codes
-                                .iter()
-                                .map(|err_code| err_code.to_string())
-                                .collect(),
+                        let (borrowck_result, mutant_body_with_borrowck_facts) = {
+                            let consumer_opts = consumers::ConsumerOptions::PoloniusInputFacts;
+                            borrowck::do_mir_borrowck(tcx, &body, &promoted, Some(consumer_opts))
+                        };
+                        if let Some(_) = borrowck_result.tainted_by_errors {
+                            mutator_data.failed += 1;
+                            let error_codes = get_registered_errors();
+                            for error_code in error_codes.iter() {
+                                mutator_data.error_codes.insert(error_code.to_string());
+                            }
+                            BorrowCheckInfo::Failed {
+                                error_codes: error_codes
+                                    .iter()
+                                    .map(|err_code| err_code.to_string())
+                                    .collect(),
+                            }
+                        } else {
+                            mutator_data.passed += 1;
+                            passed_bodies.insert(def_id, (*mutant_body_with_borrowck_facts.unwrap()).into());
+                            BorrowCheckInfo::Passed
                         }
                     } else {
-                        mutator_data.passed += 1;
-                        passed_bodies.insert(def_id, (*mutant_body_with_borrowck_facts.unwrap()).into());
-                        BorrowCheckInfo::Passed
-                    }
-                } else {
-                    BorrowCheckInfo::NoRun
-                };
-                let log_entry = LogEntry {
-                    mutation_type: mutator.name(),
-                    borrow_check_info: borrow_check_info,
-                    definition: format!("{def_id:?}"),
-                    range: range,
-                    info: info,
-                };
-                mutants_log.insert(mutants_log.len().to_string(), log_entry);
-                compiler.sess.dcx().reset_err_count(); // cursed
+                        BorrowCheckInfo::NoRun
+                    };
+                    let log_entry = LogEntry {
+                        mutation_type: mutator.name(),
+                        borrow_check_info: borrow_check_info,
+                        definition: format!("{def_id:?}"),
+                        range: range,
+                        info: info,
+                    };
+                    mutants_log.insert(mutants_log.len().to_string(), log_entry);
+                    compiler.sess.dcx().reset_err_count(); // cursed
+                });
             }
         }
     }
@@ -324,7 +327,7 @@ fn run_mutation_tests<'tcx>(
         }
     }
 
-    run_pcg_on_all_fns(&passed_bodies, tcx);
+    // run_pcg_on_all_fns(&passed_bodies, tcx);
 
     let crate_name = tcx.crate_name(CrateNum::from_usize(0)).to_string();
 
@@ -404,12 +407,12 @@ fn main() {
     rustc_args.extend(std::env::args().skip(1));
     let mut callbacks = MutatorCallbacks {
         mutators: vec![
-            // Box::new(BlockMutableBorrow),
-            // Box::new(MutablyLendShared),
+            Box::new(BlockMutableBorrow),
+            Box::new(MutablyLendShared),
             // Box::new(ReadFromWriteOnly),
-            // Box::new(WriteToReadOnly),
-            // Box::new(WriteToShared),
-            // Box::new(MoveFromBorrowed),
+            // Box::new(WriteToReadOnly), // TODO it seems that this causes a panic in the compiler sometimes - we may want to check that what we write to is named
+            Box::new(WriteToShared),
+            Box::new(MoveFromBorrowed),
             // Box::new(MutablyLendReadOnly),
             Box::new(ExpiryOrder),
         ],
