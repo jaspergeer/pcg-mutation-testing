@@ -70,7 +70,7 @@ pub(crate) fn borrowed_place_capabilities<'mir, 'tcx>(
     borrow_capabilities
         .iter()
         .flat_map(|(pcg_node, node_capability)| {
-            pcg_node_to_current_place(pcg_node).map(|place| (place, node_capability))
+            pcg_node_to_current_local_place(pcg_node).map(|place| (place, node_capability))
         })
         .collect()
 }
@@ -95,14 +95,9 @@ fn maybe_old_place_to_current_place<'tcx>(maybe_old_place: MaybeOldPlace<'tcx>) 
     }
 }
 
-pub(crate) fn pcg_node_to_current_place<'tcx>(pcg_node: PCGNode<'tcx>) -> Option<Place<'tcx>> {
+fn pcg_node_to_current_local_place<'tcx>(pcg_node: PCGNode<'tcx>) -> Option<Place<'tcx>> {
     match pcg_node {
-        PCGNode::Place(maybe_remote_place) =>
-          match maybe_remote_place {
-              MaybeRemotePlace::Local(maybe_old_place) =>
-                  maybe_old_place_to_current_place(maybe_old_place),
-              _ => None
-          }
+        PCGNode::Place(maybe_remote_place) => maybe_remote_place.as_current_place(),
         _ => None,
     }
 }
@@ -114,6 +109,10 @@ pub(crate) fn fresh_local<'tcx>(body: &mut Body<'tcx>, ty: Ty<'tcx>) -> Local {
     body
         .local_decls
         .push(fresh_local_decl)
+}
+
+pub(crate) fn fresh_basic_block<'tcx>(body: &mut Body<'tcx>) -> BasicBlock {
+    body.basic_blocks_mut().push(BasicBlockData::new(None))
 }
 
 pub(crate) fn bogus_source_info<'tcx>(body: &Body<'tcx>) -> SourceInfo {

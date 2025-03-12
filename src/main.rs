@@ -11,6 +11,7 @@ use pcg_evaluation::mutator::read_from_write::ReadFromWriteOnly;
 use pcg_evaluation::mutator::write_to_shared::WriteToShared;
 use pcg_evaluation::mutator::write_to_read::WriteToReadOnly;
 use pcg_evaluation::mutator::move_from_borrowed::MoveFromBorrowed;
+use pcg_evaluation::mutator::expiry_order::ExpiryOrder;
 
 use pcg_evaluation::utils::env_feature_enabled;
 
@@ -403,13 +404,14 @@ fn main() {
     rustc_args.extend(std::env::args().skip(1));
     let mut callbacks = MutatorCallbacks {
         mutators: vec![
-            Box::new(BlockMutableBorrow),
-            Box::new(MutablyLendShared),
-            Box::new(ReadFromWriteOnly),
-            Box::new(WriteToReadOnly),
-            Box::new(WriteToShared),
-            Box::new(MoveFromBorrowed),
-            Box::new(MutablyLendReadOnly),
+            // Box::new(BlockMutableBorrow),
+            // Box::new(MutablyLendShared),
+            // Box::new(ReadFromWriteOnly),
+            // Box::new(WriteToReadOnly),
+            // Box::new(WriteToShared),
+            // Box::new(MoveFromBorrowed),
+            // Box::new(MutablyLendReadOnly),
+            Box::new(ExpiryOrder),
         ],
         results_dir: results_dir,
     };

@@ -1,15 +1,19 @@
 use super::utils::bogus_source_info;
 use super::utils::borrowed_places;
 use super::utils::fresh_local;
+use super::utils::fresh_basic_block;
 use super::utils::is_mut;
 
 use std::collections::HashSet;
+use std::collections::HashMap;
+use std::collections::VecDeque;
 
 use super::mutator_impl::Mutant;
 use super::mutator_impl::MutantLocation;
 use super::mutator_impl::MutantRange;
 use super::mutator_impl::PeepholeMutator;
 
+use crate::rustc_interface::middle::mir::BasicBlockData;
 use crate::rustc_interface::middle::mir::Body;
 use crate::rustc_interface::middle::mir::BorrowKind;
 use crate::rustc_interface::middle::mir::FakeReadCause;
@@ -19,6 +23,8 @@ use crate::rustc_interface::middle::mir::PlaceRef;
 use crate::rustc_interface::middle::mir::Rvalue;
 use crate::rustc_interface::middle::mir::Statement;
 use crate::rustc_interface::middle::mir::StatementKind;
+use crate::rustc_interface::middle::mir::Terminator;
+use crate::rustc_interface::middle::mir::TerminatorKind;
 use crate::rustc_interface::middle::ty::Region;
 use crate::rustc_interface::middle::ty::RegionVid;
 use crate::rustc_interface::middle::ty::RegionKind;
@@ -27,6 +33,23 @@ use crate::rustc_interface::middle::ty::TyCtxt;
 
 use pcs::free_pcs::CapabilityKind;
 use pcs::free_pcs::PcgLocation;
+
+use pcs::combined_pcs::PCGNode;
+use pcs::combined_pcs::PCGNodeLike;
+
+use pcs::utils::PlaceRepacker;
+use pcs::utils::place::Place;
+use pcs::utils::maybe_old::MaybeOldPlace;
+
+use pcs::borrow_pcg::has_pcs_elem::HasPcgElems;
+use pcs::borrow_pcg::graph::BorrowsGraph;
+use pcs::borrow_pcg::edge_data::EdgeData;
+use pcs::borrow_pcg::edge::kind::BorrowPCGEdgeKind;
+use pcs::borrow_pcg::borrow_pcg_edge::BorrowPCGEdgeRef;
+use pcs::borrow_pcg::borrow_pcg_edge::BorrowPCGEdgeLike;
+use pcs::borrow_pcg::borrow_pcg_edge::BlockedNode;
+use pcs::borrow_pcg::borrow_pcg_edge::LocalNode;
+use pcs::borrow_pcg::region_projection::RegionProjection;
 
 pub struct ExpiryOrder;
 
@@ -98,133 +121,250 @@ impl PeepholeMutator for ExpiryOrder {
         curr: &PcgLocation<'tcx>,
         next: &PcgLocation<'tcx>,
     ) -> Vec<Mutant<'tcx>> {
-        fn generate_mutant_with_borrow_kind<'tcx>(
-            tcx: TyCtxt<'tcx>,
-            body: &Body<'tcx>,
-            curr: &PcgLocation<'tcx>,
-            lent_place: MirPlace<'tcx>,
-            region: Region<'tcx>,
-            borrow_kind: BorrowKind,
-        ) -> Option<Mutant<'tcx>> {
-            match region.kind() {
-                RegionKind::ReVar(region_vid) => eprintln!("VID {:?}", region_vid),
-                _ => ()
+        fn expiry_order<'tcx, 'mir>(
+            borrows_graph: &BorrowsGraph<'tcx>,
+            repacker: PlaceRepacker<'mir, 'tcx>
+        ) -> Vec<HashSet<Place<'tcx>>> {
+            // TODO visit NODES rather than edges and increment only if the node is NOT REMOTE + edge is blocking (mut)
+            // TODO really what we are looking for are borrow edges,
+            // should this list include the leaves???
+            // how do we do this when all the nodes are diff types
+            let mut to_visit: VecDeque<(PCGNode<'_>, usize)> =
+                borrows_graph
+                .frozen_graph()
+                .leaf_nodes(repacker)
+                .map(BlockedNode::from)
+                .map(|node| (node, 0))
+                .collect();
+
+            let mut place_depths: HashMap<Place<'_>, usize> = HashMap::new();
+
+            let mut max_depth = 0;
+            while let Some((curr, depth)) = to_visit.pop_front() {
+                match curr {
+                    PCGNode::RegionProjection(mut region_projection) =>
+                        for maybe_old_place in region_projection.pcg_elems().iter() {
+                            if let MaybeOldPlace::Current { place } = maybe_old_place {
+                                if place_depths.get(place).iter().all(|place_depth| **place_depth < depth) {
+                                    place_depths.insert(*place, depth);
+                                    max_depth = std::cmp::max(max_depth, depth);
+                                }
+                            }
+                        },
+                    PCGNode::Place(maybe_remote_place) =>
+                        if let Some(place) = maybe_remote_place.as_current_place() {
+                            if place_depths.get(&place).iter().all(|place_depth| **place_depth < depth) {
+                                place_depths.insert(place.into(), depth);
+                                max_depth = std::cmp::max(max_depth, depth);
+                            }
+                        }
+                }
+
+                let maybe_local_node = curr.try_to_local_node(repacker);
+                let blocked_edges =
+                    maybe_local_node
+                    .iter()
+                    .flat_map(|local_node_ref| {
+                        let local_node = *local_node_ref;
+                        borrows_graph.edges_blocked_by(local_node, repacker)
+                    });
+
+
+                for edge in blocked_edges {
+                    match edge.kind() {
+                        BorrowPCGEdgeKind::Borrow(borrow_edge) => {
+                            let mut blocked_nodes = edge.blocked_nodes(repacker);
+                            let mut new_nodes =
+                                blocked_nodes
+                                    .drain()
+                                    .map(|node| (node, depth + 1));
+                            to_visit.extend(new_nodes);
+                        }
+                        BorrowPCGEdgeKind::BorrowPCGExpansion(_) => {
+                            let mut blocked_nodes = edge.blocked_nodes(repacker);
+                            let mut new_nodes =
+                                blocked_nodes
+                                    .drain()
+                                    .map(|node| (node, depth));
+                            to_visit.extend(new_nodes);
+                        }
+                        _=> (),
+                    }
+                }
             }
-            let mut mutant_body = body.clone();
-            let region = Region::new_var(tcx, RegionVid::MAX);
 
-            let borrow_ty =
-                Ty::new_mut_ref(tcx, region, lent_place.ty(&body.local_decls, tcx).ty);
+            let mut buckets: Vec<HashSet<Place<'_>>> = vec![];
 
-            let fresh_local = fresh_local(&mut mutant_body, borrow_ty);
+            for i in (0..max_depth + 1) {
+                buckets.push(HashSet::new());
+            }
 
-            let statement_index = curr.location.statement_index;
+            for (place, depth) in place_depths.iter() {
+                buckets.get_mut(*depth).unwrap().insert(*place);
+            }
 
-            let place_live = Statement {
-                source_info: bogus_source_info(&mutant_body),
-                kind: StatementKind::StorageLive(fresh_local),
-            };
-
-            let place_dead = Statement {
-                source_info: bogus_source_info(&mutant_body),
-                kind: StatementKind::StorageDead(fresh_local),
-            };
-
-            let fake_read = Statement {
-                source_info: bogus_source_info(&mutant_body),
-                kind: StatementKind::FakeRead(Box::new((
-                    FakeReadCause::ForLet(None),
-                    MirPlace::from(fresh_local),
-                ))),
-            };
-
-            let place_mention = Statement {
-                source_info: bogus_source_info(&mutant_body),
-                kind: StatementKind::PlaceMention(Box::new(
-                        MirPlace::from(fresh_local))),
-            };
-
-            let new_borrow = Statement {
-                source_info: bogus_source_info(&mutant_body),
-                kind: StatementKind::Assign(Box::new((
-                    MirPlace::from(fresh_local),
-                    Rvalue::Ref(region, borrow_kind, lent_place),
-                ))),
-            };
-
-            let info = format!(
-                "{:?} was mutably lent, so inserted {:?}",
-                lent_place, &new_borrow
-            );
-
-            let bb_index = curr.location.block;
-            let bb = mutant_body.basic_blocks_mut().get_mut(bb_index)?;
-            bb.statements.push(place_dead);
-            bb.statements.insert(statement_index + 2, place_mention);
-            bb.statements.insert(statement_index, fake_read);
-            bb.statements.insert(statement_index, new_borrow);
-            bb.statements.insert(statement_index, place_live);
-
-            let borrow_loc = MutantLocation {
-                basic_block: curr.location.block.index(),
-                statement_index: statement_index,
-            };
-
-            let mention_loc = MutantLocation {
-                basic_block: curr.location.block.index(),
-                statement_index: statement_index + 2,
-            };
-
-            Some(Mutant {
-                body: mutant_body,
-                range: MutantRange {
-                    start: borrow_loc,
-                    end: mention_loc,
-                },
-                info: info,
-            })
+            buckets.drain(..).filter(|bucket| !bucket.is_empty()).collect()
         }
 
-        let mutably_lent_in_curr = {
-            let borrows_graph = curr.borrows.post_main().graph();
-            borrowed_places(borrows_graph, is_mut).map(|(place, _)| place).collect::<HashSet<_>>()
+        fn places_blocking<'mir, 'tcx>(
+            place: Place<'tcx>,
+            borrows_graph: &BorrowsGraph<'tcx>,
+            repacker: PlaceRepacker<'mir, 'tcx>
+        ) -> HashSet<Place<'tcx>> {
+            let node = place.into();
+            let mut to_visit: VecDeque<(BorrowPCGEdgeRef<'_, '_>, bool)> =
+                borrows_graph
+                .frozen_graph()
+                .get_edges_blocking(node, repacker)
+                .drain()
+                .map(|edge| (edge, false))
+                .collect();
+            let mut places: HashSet<Place<'tcx>> = HashSet::new();
+
+            while let Some((curr, mut is_blocking)) = to_visit.pop_front() {
+                if let BorrowPCGEdgeKind::Borrow(borrow_edge) = curr.kind() {
+                    is_blocking = is_blocking || borrow_edge.is_mut(repacker);
+                }
+                if is_blocking {
+                    let mut nodes: Vec<_> = curr
+                        .blocked_by_nodes(repacker)
+                        .drain()
+                        .flat_map(MaybeOldPlace::try_from)
+                        .flat_map(|maybe_old_place| match maybe_old_place {
+                            MaybeOldPlace::Current { place } => Some(place),
+                            _ => None
+                        })
+                        .collect();
+                    places.extend(nodes.drain(..));
+                }
+                let mut incident_nodes = curr.blocked_by_nodes(repacker);
+                let mut adjacent_edges =
+                    incident_nodes
+                    .drain()
+                    .map(BlockedNode::from)
+                    .flat_map(|node|
+                              borrows_graph.frozen_graph()
+                              .get_edges_blocking(node, repacker))
+                    .map(|edge| (edge, is_blocking));
+
+                to_visit.extend(adjacent_edges);
+            }
+            places
+        }
+
+        fn places_to_statements<'tcx>(
+            tcx: TyCtxt<'tcx>,
+            body: &mut Body<'tcx>,
+            places: impl Iterator<Item = Place<'tcx>>,
+        ) -> Vec<Statement<'tcx>> {
+            places.map(|place| {
+                let mir_place = PlaceRef::from(*place).to_place(tcx);
+                let target = fresh_local(body, mir_place.ty(&body.local_decls, tcx).ty);
+                let region = Region::new_var(tcx, RegionVid::MAX);
+                Statement {
+                    source_info: bogus_source_info(body),
+                    kind: StatementKind::Assign(Box::new((
+                        MirPlace::from(target),
+                        Rvalue::Ref(region, BorrowKind::Shared, mir_place)
+                    )))
+                }
+            }).collect()
+        }
+
+        // TODO there might be some borrows expired at the post operands of next
+        // these will now be expired at the first statement of our new branch
+        // we split between curr and next
+
+        // TODO we could also just mark nodes by depth and then create mutants by
+        // attempting to access a node while all of the nodes in a smaller depth
+        // are still live
+        // when a node is encountered at two depths, take the larger depth
+        //
+        // alternatively, we can top sort with a random seed and mutate from there?
+
+
+        // let mutant_bb = BasicBlockData::new(
+        //     None
+        // );
+
+        let repacker = PlaceRepacker::new(&body, tcx);
+        let borrows_graph = next.borrows.post_operands().graph();
+        let expiry_sequence: Vec<_> = {
+            let mut expiry_order = expiry_order(&borrows_graph, repacker);
+            expiry_order.drain(..).flatten().collect()
         };
 
-        let mutably_lent_in_next = {
-            let borrows_graph = next.borrows.post_main().graph();
-            borrowed_places(borrows_graph, is_mut)
-        };
+        eprintln!("expiry sequence{:?}", &expiry_sequence);
+        let mut mutant_sequences = vec![];
+        for i in 0..expiry_sequence.len() {
+            let blocking_places = places_blocking(expiry_sequence[i], &borrows_graph, repacker);
+            for j in 0..i {
+                if blocking_places.contains(&expiry_sequence[j]) {
+                    let mut mutant_body = body.clone();
+                    let mut mutant_sequence =
+                        places_to_statements(tcx,
+                                             &mut mutant_body,
+                                             expiry_sequence
+                                             .iter()
+                                             .map(|place| *place));
+                    let blocked_statement = mutant_sequence.remove(i);
+                    mutant_sequence.insert(j, blocked_statement);
+                    mutant_sequences.push((mutant_sequence, mutant_body));
+                }
+            }
+        }
 
-        mutably_lent_in_next
-            .filter(|(place, _)| !mutably_lent_in_curr.contains(place))
-            .flat_map(|(place, region)| {
-                let lent_place = PlaceRef::from(*place).to_place(tcx);
-                vec![
-                    // TODO Doesn't produce borrow checker violations for some reason
-                    // generate_mutant_with_borrow_kind(
-                    //     tcx,
-                    //     body,
-                    //     curr,
-                    //     lent_place,
-                    //     region,
-                    //     BorrowKind::Shared,
-                    // ),
-                    generate_mutant_with_borrow_kind(
-                        tcx,
-                        body,
-                        curr,
-                        lent_place,
-                        region,
-                        BorrowKind::Mut {
-                            kind: MutBorrowKind::Default,
-                        },
-                    ),
-                ]
-                .drain(..)
-                .flatten()
-                .collect::<Vec<_>>()
-            })
-            .collect()
+        eprintln!("mutant sequences: {:?}", &mutant_sequences);
+        mutant_sequences.drain(..).map(|(mutant_sequence, mut mutant_body)| {
+            let curr_bb_index = curr.location.block;
+            let bb = mutant_body.basic_blocks_mut().get_mut(curr_bb_index).unwrap();
+            let mut tail_statements =
+                bb.statements.drain(next.location.statement_index..).collect();
+
+            let bb_terminator = bb.terminator.take();
+            let tail_bb_index = fresh_basic_block(&mut mutant_body);
+            let mut tail_bb = mutant_body.basic_blocks_mut().get_mut(tail_bb_index).unwrap();
+            tail_bb.statements.append(&mut tail_statements);
+            tail_bb.terminator = bb_terminator;
+
+            let bogus_source_info = bogus_source_info(&mutant_body);
+
+            let mutant_bb_index = fresh_basic_block(&mut mutant_body);
+            let mut mutant_bb = mutant_body.basic_blocks_mut().get_mut(mutant_bb_index).unwrap();
+            mutant_bb.statements = mutant_sequence;
+            mutant_bb.terminator = Some(Terminator {
+                source_info: bogus_source_info,
+                kind: TerminatorKind::Return
+            });
+
+            let start_loc = MutantLocation {
+                basic_block: mutant_bb_index.into(),
+                statement_index: 0,
+            };
+
+            let end_loc = MutantLocation {
+                basic_block: mutant_bb_index.into(),
+                statement_index: mutant_bb.statements.len() - 1,
+            };
+
+            let bb = mutant_body.basic_blocks_mut().get_mut(curr_bb_index).unwrap();
+            bb.terminator = Some(Terminator {
+                source_info: bogus_source_info,
+                kind: TerminatorKind::FalseEdge {
+                    real_target: tail_bb_index,
+                    imaginary_target: mutant_bb_index,
+                }
+            });
+
+            Mutant {
+                body: mutant_body,
+                range: MutantRange {
+                    start: start_loc,
+                    end: end_loc,
+                },
+                info: "todo".to_string(),
+            }
+        }).collect()
     }
 
     fn run_ratio(&mut self) -> (u32, u32) {

@@ -1,5 +1,6 @@
 pub mod mutator_impl;
 pub mod block_mutable_borrow;
+pub mod expiry_order;
 pub mod mutably_lend_shared;
 pub mod mutably_lend_read;
 pub mod read_from_write;
