@@ -12,6 +12,7 @@ use pcg_evaluation::mutator::write_to_shared::WriteToShared;
 use pcg_evaluation::mutator::write_to_read::WriteToReadOnly;
 use pcg_evaluation::mutator::move_from_borrowed::MoveFromBorrowed;
 use pcg_evaluation::mutator::expiry_order::ExpiryOrder;
+use pcg_evaluation::mutator::shallow_exclusive_read::ShallowExclusiveRead;
 
 use pcg_evaluation::utils::env_feature_enabled;
 
@@ -248,6 +249,7 @@ fn run_mutation_tests<'tcx>(
                             serde_json::to_value(&range).unwrap(),
                             def_id
                         );
+                        eprintln!("INFO {:?}", &info);
                         track_body_error_codes(def_id);
 
                         let (borrowck_result, mutant_body_with_borrowck_facts) = {
@@ -327,7 +329,7 @@ fn run_mutation_tests<'tcx>(
         }
     }
 
-    // run_pcg_on_all_fns(&passed_bodies, tcx);
+    run_pcg_on_all_fns(&passed_bodies, tcx);
 
     let crate_name = tcx.crate_name(CrateNum::from_usize(0)).to_string();
 
@@ -409,12 +411,13 @@ fn main() {
         mutators: vec![
             Box::new(BlockMutableBorrow),
             Box::new(MutablyLendShared),
-            // Box::new(ReadFromWriteOnly),
-            // Box::new(WriteToReadOnly), // TODO it seems that this causes a panic in the compiler sometimes - we may want to check that what we write to is named
+            Box::new(ReadFromWriteOnly),
+            Box::new(WriteToReadOnly),
             Box::new(WriteToShared),
             Box::new(MoveFromBorrowed),
-            // Box::new(MutablyLendReadOnly),
+            Box::new(MutablyLendReadOnly),
             Box::new(ExpiryOrder),
+            Box::new(ShallowExclusiveRead),
         ],
         results_dir: results_dir,
     };

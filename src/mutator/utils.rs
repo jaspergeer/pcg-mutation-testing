@@ -154,3 +154,12 @@ pub(crate) fn borrowed_places<'graph, 'tcx>(
         _ => None
     })
 }
+
+pub(crate) fn has_named_local<'tcx>(place: Place<'tcx>, body: &Body<'tcx>) -> bool {
+    match body.local_decls.get(place.local) {
+        Some(local_decl) => {
+            local_decl.is_user_variable()
+        },
+        None => false,
+    }
+}

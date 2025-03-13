@@ -2,6 +2,7 @@ use super::utils::bogus_source_info;
 use super::utils::borrowed_places;
 use super::utils::fresh_local;
 use super::utils::is_mut;
+use super::utils::has_named_local;
 
 use std::collections::HashSet;
 
@@ -79,7 +80,7 @@ impl PeepholeMutator for BlockMutableBorrow {
 
             let fresh_local_deref = tcx.mk_place_elem(
                 MirPlace::from(fresh_local),
-                MirPlaceElem::Deref
+                MirPlaceElem::Deref,
             );
 
             let place_mention = Statement {
@@ -154,29 +155,30 @@ impl PeepholeMutator for BlockMutableBorrow {
         };
 
         mutably_lent_in_next
+            .filter(|(place, _)| has_named_local(*place, body))
             .filter(|(place, _)| !mutably_lent_in_curr.contains(place))
             .flat_map(|(place, region)| {
                 let lent_place = PlaceRef::from(*place).to_place(tcx);
                 vec![
                     // TODO Doesn't produce borrow checker violations for some reason
-                    generate_mutant_with_borrow_kind(
-                        tcx,
-                        body,
-                        curr,
-                        lent_place,
-                        region,
-                        BorrowKind::Shared,
-                    ),
                     // generate_mutant_with_borrow_kind(
                     //     tcx,
                     //     body,
                     //     curr,
                     //     lent_place,
                     //     region,
-                    //     BorrowKind::Mut {
-                    //         kind: MutBorrowKind::Default,
-                    //     },
+                    //     BorrowKind::Shared,
                     // ),
+                    generate_mutant_with_borrow_kind(
+                        tcx,
+                        body,
+                        curr,
+                        lent_place,
+                        region,
+                        BorrowKind::Mut {
+                            kind: MutBorrowKind::Default,
+                        },
+                    ),
                 ]
                 .drain(..)
                 .flatten()

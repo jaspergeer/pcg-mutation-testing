@@ -1,6 +1,9 @@
 use super::utils::filter_borrowed_places_by_capability;
 use super::utils::filter_owned_places_by_capability;
 use super::utils::bogus_source_info;
+use super::utils::has_named_local;
+
+use std::collections::HashSet;
 
 use super::mutator_impl::Mutant;
 use super::mutator_impl::MutantLocation;
@@ -29,7 +32,7 @@ impl PeepholeMutator for WriteToReadOnly {
     ) -> Vec<Mutant<'tcx>> {
         let read_only_in_curr = {
             let borrows_state = curr.borrows.post_main();
-            let mut owned_write = {
+            let mut owned_write: HashSet<_> = {
                 let owned_capabilities = curr.states.post_main();
                 filter_owned_places_by_capability(&owned_capabilities, |ck| ck == CapabilityKind::Read)
             };
@@ -57,6 +60,7 @@ impl PeepholeMutator for WriteToReadOnly {
 
         read_only_in_curr
             .iter()
+            .filter(|place| has_named_local(**place, body))
             .filter(|place| read_only_in_next.contains(place))
             .flat_map(|place| {
                 let read_only_place = PlaceRef::from(**place).to_place(tcx);

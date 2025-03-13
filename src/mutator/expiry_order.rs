@@ -238,7 +238,6 @@ impl PeepholeMutator for ExpiryOrder {
             expiry_order.drain(..).flatten().collect()
         };
 
-        // eprintln!("expiry sequence{:?}", &expiry_sequence);
         let mut mutant_sequences = vec![];
         for i in 0..expiry_sequence.len() {
             let blocking_places = places_blocking(expiry_sequence[i], &borrows_graph, repacker);
