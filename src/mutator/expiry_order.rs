@@ -52,12 +52,12 @@ use pcs::borrow_pcg::edge::borrow::BorrowEdge;
 use pcs::borrow_pcg::edge::kind::BorrowPCGEdgeKind;
 use pcs::borrow_pcg::edge_data::EdgeData;
 use pcs::borrow_pcg::graph::BorrowsGraph;
-use pcs::borrow_pcg::has_pcs_elem::HasPcgElems;
 use pcs::borrow_pcg::region_projection::RegionProjection;
 
 fn expiry_order<'tcx, 'mir>(
     borrows_graph: &BorrowsGraph<'tcx>,
     repacker: PlaceRepacker<'mir, 'tcx>,
+    loc: &PcgLocation<'tcx>,
 ) -> Vec<HashSet<Place<'tcx>>> {
     // TODO visit NODES rather than edges and increment only if the node is NOT REMOTE + edge is blocking (mut)
     // TODO really what we are looking for are borrow edges,
@@ -79,9 +79,11 @@ fn expiry_order<'tcx, 'mir>(
     let mut max_depth = 0;
 
     while let Some((curr, depth)) = to_visit.pop_front() {
+        eprintln!("SOURCE: {:?}", repacker.body().source.instance);
+        eprintln!("LOC: {:?} VISIT (sort): {:?}", loc.location, curr);
         max_depth = std::cmp::max(max_depth, depth);
         if let Some(place) = pcg_node_to_current_place(curr) {
-            if has_named_local(place, repacker) {
+            if has_named_local(place, repacker.body()) {
                 place_depths.insert(place, depth);
             }
         }
@@ -134,6 +136,7 @@ fn places_blocking<'mir, 'tcx>(
     let mut places: HashSet<Place<'tcx>> = HashSet::new();
 
     while let Some((curr, mut is_blocking)) = to_visit.pop_front() {
+        eprintln!("VISIT: {:?}", curr);
         is_blocking = is_blocking || is_blocking_edge(curr.kind());
         if is_blocking {
             let mut nodes: Vec<_> = curr
@@ -211,7 +214,7 @@ impl PeepholeMutator for BorrowExpiryOrder {
         let repacker = PlaceRepacker::new(&body, tcx);
         let borrows_graph = next.borrows.post_operands().graph();
         let expiry_sequence: Vec<_> = {
-            let mut expiry_order = expiry_order(&borrows_graph, repacker);
+            let mut expiry_order = expiry_order(&borrows_graph, repacker, next);
             expiry_order.drain(..).flatten().collect()
         };
 
@@ -363,13 +366,13 @@ impl PeepholeMutator for AbstractExpiryOrder {
 
         let repacker = PlaceRepacker::new(&body, tcx);
         let borrows_graph = next.borrows.post_operands().graph();
-        eprintln!();
-        eprintln!("at: {:?}", &curr.location);
+        // eprintln!();
+        // eprintln!("at: {:?}", &curr.location);
         let expiry_sequence: Vec<_> = {
-            let mut expiry_order = expiry_order(&borrows_graph, repacker);
+            let mut expiry_order = expiry_order(&borrows_graph, repacker, next);
             expiry_order.drain(..).flatten().collect()
         };
-        eprintln!("expiry order: {:?}", &expiry_sequence);
+        // eprintln!("expiry order: {:?}", &expiry_sequence);
 
         let mutably_borrowed_places: HashSet<Place<'tcx>> =
             borrowed_places(&borrows_graph, is_mut)
@@ -396,7 +399,7 @@ impl PeepholeMutator for AbstractExpiryOrder {
                             &mut mutant_body,
                             expiry_sequence.iter().map(|place| *place),
                         );
-                        eprintln!("mutant sequence {:?}", &mutant_sequence);
+                        // eprintln!("mutant sequence {:?}", &mutant_sequence);
                         let blocked_statement = mutant_sequence.remove(i);
                         mutant_sequence.insert(j, blocked_statement);
                         mutant_sequences.push((mutant_sequence, mutant_body));

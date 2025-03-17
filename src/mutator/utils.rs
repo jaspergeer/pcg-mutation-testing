@@ -76,7 +76,7 @@ pub(crate) fn borrowed_place_capabilities<'mir, 'tcx>(
     borrow_capabilities
         .iter()
         .flat_map(|(pcg_node, node_capability)| {
-            pcg_node_to_current_place(pcg_node).map(|place| (place, node_capability))
+            maybe_old_place_to_current_place(pcg_node).map(|place| (place, node_capability))
         })
         .collect()
 }
@@ -187,31 +187,12 @@ pub(crate) fn borrowed_places<'graph, 'tcx>(
 
 pub(crate) fn has_named_local<'tcx>(
     place: Place<'tcx>,
-    repacker: PlaceRepacker<'_, 'tcx>,
+    body: &Body<'tcx>,
 ) -> bool {
-    repacker.body().var_debug_info.iter().any(|info| match info.value {
-        VarDebugInfoContents::Place(var_place) =>
-            if var_place.local == place.local {
-                let outer_span = repacker.body().span;
-                let span = info.source_info.span;
-                if outer_span.contains(span) {
-                    eprintln!("APPROVED LOCAL: {:?}", place.local);
-                    return true;
-                } else if outer_span.contains(span.source_callsite()) {
-                    eprintln!("APRROVED LOCAL: {:?}", place.local);
-                    return true;
-                }
-                return false;
-            } else {
-                false
-            },
-        _ => false,
-    })
-    // match body.local_decls.get(place.local) {
-    //     Some(local_decl) => {
-    //         eprintln!("checking localdecl {:?}", local_decl);
-    //         local_decl.is_user_variable()
-    //     },
-    //     None => false,
-    // }
+    match body.local_decls.get(place.local) {
+        Some(local_decl) => {
+            local_decl.is_user_variable()
+        },
+        None => false,
+    }
 }

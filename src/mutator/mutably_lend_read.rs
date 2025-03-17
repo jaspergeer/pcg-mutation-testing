@@ -75,11 +75,9 @@ impl PeepholeMutator for MutablyLendReadOnly {
             owned_read
         };
 
-        let repacker = PlaceRepacker::new(body, tcx);
-
         read_only_in_curr
             .iter()
-            .filter(|place| has_named_local(**place, repacker))
+            .filter(|place| has_named_local(**place, body))
             .filter(|place| read_only_in_next.contains(place))
             .flat_map(|place| {
                 let mut mutant_body = body.clone();

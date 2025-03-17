@@ -21,8 +21,6 @@ use crate::rustc_interface::middle::ty::TyCtxt;
 use pcs::free_pcs::CapabilityKind;
 use pcs::free_pcs::PcgLocation;
 
-use pcs::utils::PlaceRepacker;
-
 pub struct WriteToReadOnly;
 
 impl PeepholeMutator for WriteToReadOnly {
@@ -68,11 +66,9 @@ impl PeepholeMutator for WriteToReadOnly {
             owned_write
         };
 
-        let repacker = PlaceRepacker::new(body, tcx);
-
         read_only_in_curr
             .iter()
-            .filter(|place| has_named_local(**place, repacker))
+            .filter(|place| has_named_local(**place, body))
             .filter(|place| read_only_in_next.contains(place))
             .flat_map(|place| {
                 let read_only_place = PlaceRef::from(**place).to_place(tcx);

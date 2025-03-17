@@ -154,10 +154,8 @@ impl PeepholeMutator for BlockMutableBorrow {
             borrowed_places(borrows_graph, is_mut)
         };
 
-        let repacker = PlaceRepacker::new(body, tcx);
-
         mutably_lent_in_next
-            .filter(|(place, _)| has_named_local(*place, repacker))
+            .filter(|(place, _)| has_named_local(*place, body))
             .filter(|(place, _)| !mutably_lent_in_curr.contains(place))
             .flat_map(|(place, region)| {
                 let lent_place = PlaceRef::from(*place).to_place(tcx);

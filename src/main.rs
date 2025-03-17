@@ -412,14 +412,14 @@ fn main() {
     rustc_args.extend(std::env::args().skip(1));
     let mut callbacks = MutatorCallbacks {
         mutators: vec![
-            Box::new(BorrowExpiryOrder),
+            // Box::new(BorrowExpiryOrder),
             // Box::new(AbstractExpiryOrder),
             // Box::new(MutablyLendShared),
             // Box::new(ReadFromWriteOnly),
-            // Box::new(WriteToReadOnly),
-            // Box::new(WriteToShared),
+            Box::new(WriteToReadOnly),
+            Box::new(WriteToShared),
             // Box::new(MoveFromBorrowed),
-            // Box::new(MutablyLendReadOnly),
+            Box::new(MutablyLendReadOnly),
             // Box::new(ShallowExclusiveRead),
         ],
         results_dir: results_dir,
