@@ -1,5 +1,5 @@
-use super::utils::fresh_local;
 use super::utils::borrowed_places;
+use super::utils::fresh_local;
 use super::utils::is_shared;
 
 use std::collections::HashSet;
@@ -41,7 +41,9 @@ impl PeepholeMutator for MutablyLendShared {
 
         let immutably_lent_in_next = {
             let borrows_graph = next.borrows.post_main().graph();
-            borrowed_places(borrows_graph, is_shared).map(|(place, _)| place).collect::<HashSet<_>>()
+            borrowed_places(borrows_graph, is_shared)
+                .map(|(place, _)| place)
+                .collect::<HashSet<_>>()
         };
 
         immutably_lent_in_curr
@@ -50,11 +52,8 @@ impl PeepholeMutator for MutablyLendShared {
                 let lent_place = PlaceRef::from(*place).to_place(tcx);
                 let mut mutant_body = body.clone();
 
-                let borrow_ty = Ty::new_mut_ref(
-                    tcx,
-                    region,
-                    lent_place.ty(&body.local_decls, tcx).ty,
-                );
+                let borrow_ty =
+                    Ty::new_mut_ref(tcx, region, lent_place.ty(&body.local_decls, tcx).ty);
 
                 let fresh_local = fresh_local(&mut mutant_body, borrow_ty);
 

@@ -1,6 +1,6 @@
+use super::utils::borrowed_places;
 use super::utils::filter_borrowed_places_by_capability;
 use super::utils::filter_owned_places_by_capability;
-use super::utils::borrowed_places;
 use super::utils::fresh_local;
 use super::utils::has_named_local;
 
@@ -22,13 +22,15 @@ use crate::rustc_interface::middle::mir::Rvalue;
 use crate::rustc_interface::middle::mir::Statement;
 use crate::rustc_interface::middle::mir::StatementKind;
 use crate::rustc_interface::middle::ty::Region;
-use crate::rustc_interface::middle::ty::RegionVid;
 use crate::rustc_interface::middle::ty::RegionKind;
+use crate::rustc_interface::middle::ty::RegionVid;
 use crate::rustc_interface::middle::ty::Ty;
 use crate::rustc_interface::middle::ty::TyCtxt;
 
 use pcs::free_pcs::CapabilityKind;
 use pcs::free_pcs::PcgLocation;
+
+use pcs::utils::PlaceRepacker;
 
 pub struct MutablyLendReadOnly;
 
@@ -43,11 +45,15 @@ impl PeepholeMutator for MutablyLendReadOnly {
             let borrows_state = curr.borrows.post_main();
             let mut owned_read = {
                 let owned_capabilities = curr.states.post_main();
-                filter_owned_places_by_capability(&owned_capabilities, |ck| ck == CapabilityKind::Read)
+                filter_owned_places_by_capability(&owned_capabilities, |ck| {
+                    ck == CapabilityKind::Read
+                })
             };
             let mut borrowed_read = {
                 let borrow_capabilities = borrows_state.capabilities();
-                filter_borrowed_places_by_capability(&borrow_capabilities, |ck| ck == CapabilityKind::Read)
+                filter_borrowed_places_by_capability(&borrow_capabilities, |ck| {
+                    ck == CapabilityKind::Read
+                })
             };
             owned_read.extend(borrowed_read.drain());
             owned_read
@@ -57,19 +63,23 @@ impl PeepholeMutator for MutablyLendReadOnly {
             let borrows_state = next.borrows.post_main();
             let mut owned_read = {
                 let owned_capabilities = next.states.post_main();
-                filter_owned_places_by_capability(&owned_capabilities, |ck| ck == CapabilityKind::Read)
+                filter_owned_places_by_capability(&owned_capabilities, |ck| {
+                    ck == CapabilityKind::Read
+                })
             };
-            let mut borrowed_read = {
-                let borrow_capabilities = borrows_state.capabilities();
-                filter_borrowed_places_by_capability(borrow_capabilities, |ck| ck == CapabilityKind::Read)
-            };
-            owned_read.extend(borrowed_read.drain());
+            // let mut borrowed_read = {
+            //     let borrow_capabilities = borrows_state.capabilities();
+            //     filter_borrowed_places_by_capability(borrow_capabilities, |ck| ck == CapabilityKind::Read)
+            // };
+            // owned_read.extend(borrowed_read.drain());
             owned_read
         };
 
+        let repacker = PlaceRepacker::new(body, tcx);
+
         read_only_in_curr
             .iter()
-            .filter(|place| has_named_local(**place, body))
+            .filter(|place| has_named_local(**place, repacker))
             .filter(|place| read_only_in_next.contains(place))
             .flat_map(|place| {
                 let mut mutant_body = body.clone();
@@ -77,11 +87,8 @@ impl PeepholeMutator for MutablyLendReadOnly {
 
                 let read_only_place = PlaceRef::from(**place).to_place(tcx);
 
-                let read_only_place_ty = Ty::new_mut_ref(
-                    tcx,
-                    region,
-                    read_only_place.ty(&body.local_decls, tcx).ty,
-                );
+                let read_only_place_ty =
+                    Ty::new_mut_ref(tcx, region, read_only_place.ty(&body.local_decls, tcx).ty);
 
                 let fresh_local = fresh_local(&mut mutant_body, read_only_place_ty);
 

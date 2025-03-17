@@ -1,6 +1,6 @@
+use super::utils::borrowed_places;
 use super::utils::filter_borrowed_places_by_capability;
 use super::utils::filter_owned_places_by_capability;
-use super::utils::borrowed_places;
 use super::utils::fresh_local;
 
 use std::collections::HashSet;
@@ -39,12 +39,16 @@ impl PeepholeMutator for MoveFromBorrowed {
     ) -> Vec<Mutant<'tcx>> {
         let lent_in_curr = {
             let borrows_graph = curr.borrows.post_main().graph();
-            borrowed_places(borrows_graph, |_| true).map(|(place, _)| place).collect::<HashSet<_>>()
+            borrowed_places(borrows_graph, |_| true)
+                .map(|(place, _)| place)
+                .collect::<HashSet<_>>()
         };
 
         let lent_in_next = {
             let borrows_graph = next.borrows.post_main().graph();
-            borrowed_places(borrows_graph, |_| true).map(|(place, _)| place).collect::<HashSet<_>>()
+            borrowed_places(borrows_graph, |_| true)
+                .map(|(place, _)| place)
+                .collect::<HashSet<_>>()
         };
 
         lent_in_curr
@@ -70,13 +74,10 @@ impl PeepholeMutator for MoveFromBorrowed {
                     source_info: statement_source_info,
                     kind: StatementKind::Assign(Box::new((
                         MirPlace::from(fresh_local),
-                        Rvalue::Use(Operand::Move(lent_place))
+                        Rvalue::Use(Operand::Move(lent_place)),
                     ))),
                 };
-                let info = format!(
-                    "{:?} was lent, so inserted {:?}",
-                    lent_place, &new_move
-                );
+                let info = format!("{:?} was lent, so inserted {:?}", lent_place, &new_move);
                 bb.statements.insert(statement_index + 1, new_move);
 
                 let borrow_loc = MutantLocation {

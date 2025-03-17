@@ -37,11 +37,15 @@ impl PeepholeMutator for ShallowExclusiveRead {
             let borrows_state = curr.borrows.post_main();
             let mut owned_shallow_exclusive = {
                 let owned_capabilities = curr.states.post_main();
-                filter_owned_places_by_capability(&owned_capabilities, |ck| ck == CapabilityKind::ShallowExclusive)
+                filter_owned_places_by_capability(&owned_capabilities, |ck| {
+                    ck == CapabilityKind::ShallowExclusive
+                })
             };
             let mut borrowed_shallow_exclusive = {
                 let borrow_capabilities = borrows_state.capabilities();
-                filter_borrowed_places_by_capability(&borrow_capabilities, |ck| ck == CapabilityKind::ShallowExclusive)
+                filter_borrowed_places_by_capability(&borrow_capabilities, |ck| {
+                    ck == CapabilityKind::ShallowExclusive
+                })
             };
             owned_shallow_exclusive.extend(borrowed_shallow_exclusive.drain());
             owned_shallow_exclusive
@@ -51,11 +55,15 @@ impl PeepholeMutator for ShallowExclusiveRead {
             let borrows_state = next.borrows.post_main();
             let mut owned_shallow_exclusive = {
                 let owned_capabilities = next.states.post_main();
-                filter_owned_places_by_capability(&owned_capabilities, |ck| ck == CapabilityKind::ShallowExclusive)
+                filter_owned_places_by_capability(&owned_capabilities, |ck| {
+                    ck == CapabilityKind::ShallowExclusive
+                })
             };
             let mut borrowed_shallow_exclusive = {
                 let borrow_capabilities = borrows_state.capabilities();
-                filter_borrowed_places_by_capability(&borrow_capabilities, |ck| ck == CapabilityKind::ShallowExclusive)
+                filter_borrowed_places_by_capability(&borrow_capabilities, |ck| {
+                    ck == CapabilityKind::ShallowExclusive
+                })
             };
             owned_shallow_exclusive.extend(borrowed_shallow_exclusive.drain());
             owned_shallow_exclusive

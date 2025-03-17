@@ -1,6 +1,6 @@
+use super::utils::bogus_source_info;
 use super::utils::filter_borrowed_places_by_capability;
 use super::utils::filter_owned_places_by_capability;
-use super::utils::bogus_source_info;
 use super::utils::has_named_local;
 
 use std::collections::HashSet;
@@ -21,6 +21,8 @@ use crate::rustc_interface::middle::ty::TyCtxt;
 use pcs::free_pcs::CapabilityKind;
 use pcs::free_pcs::PcgLocation;
 
+use pcs::utils::PlaceRepacker;
+
 pub struct WriteToReadOnly;
 
 impl PeepholeMutator for WriteToReadOnly {
@@ -34,11 +36,15 @@ impl PeepholeMutator for WriteToReadOnly {
             let borrows_state = curr.borrows.post_main();
             let mut owned_write: HashSet<_> = {
                 let owned_capabilities = curr.states.post_main();
-                filter_owned_places_by_capability(&owned_capabilities, |ck| ck == CapabilityKind::Read)
+                filter_owned_places_by_capability(&owned_capabilities, |ck| {
+                    ck == CapabilityKind::Read
+                })
             };
             let mut borrowed_write = {
                 let borrow_capabilities = borrows_state.capabilities();
-                filter_borrowed_places_by_capability(&borrow_capabilities, |ck| ck == CapabilityKind::Read)
+                filter_borrowed_places_by_capability(&borrow_capabilities, |ck| {
+                    ck == CapabilityKind::Read
+                })
             };
             owned_write.extend(borrowed_write.drain());
             owned_write
@@ -48,19 +54,25 @@ impl PeepholeMutator for WriteToReadOnly {
             let borrows_state = next.borrows.post_main();
             let mut owned_write = {
                 let owned_capabilities = next.states.post_main();
-                filter_owned_places_by_capability(&owned_capabilities, |ck| ck == CapabilityKind::Read)
+                filter_owned_places_by_capability(&owned_capabilities, |ck| {
+                    ck == CapabilityKind::Read
+                })
             };
             let mut borrowed_write = {
                 let borrow_capabilities = borrows_state.capabilities();
-                filter_borrowed_places_by_capability(borrow_capabilities, |ck| ck == CapabilityKind::Read)
+                filter_borrowed_places_by_capability(borrow_capabilities, |ck| {
+                    ck == CapabilityKind::Read
+                })
             };
             owned_write.extend(borrowed_write.drain());
             owned_write
         };
 
+        let repacker = PlaceRepacker::new(body, tcx);
+
         read_only_in_curr
             .iter()
-            .filter(|place| has_named_local(**place, body))
+            .filter(|place| has_named_local(**place, repacker))
             .filter(|place| read_only_in_next.contains(place))
             .flat_map(|place| {
                 let read_only_place = PlaceRef::from(**place).to_place(tcx);
@@ -72,7 +84,7 @@ impl PeepholeMutator for WriteToReadOnly {
                     source_info: bogus_source_info(&mutant_body),
                     kind: StatementKind::Assign(Box::new((
                         read_only_place,
-                        Rvalue::Len(read_only_place)
+                        Rvalue::Len(read_only_place),
                     ))),
                 };
                 let info = format!(

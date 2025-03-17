@@ -36,11 +36,15 @@ impl PeepholeMutator for ReadFromWriteOnly {
             let borrows_state = curr.borrows.post_main();
             let mut owned_write = {
                 let owned_capabilities = curr.states.post_main();
-                filter_owned_places_by_capability(&owned_capabilities, |ck| ck == CapabilityKind::Write)
+                filter_owned_places_by_capability(&owned_capabilities, |ck| {
+                    ck == CapabilityKind::Write
+                })
             };
             let mut borrowed_write = {
                 let borrow_capabilities = borrows_state.capabilities();
-                filter_borrowed_places_by_capability(&borrow_capabilities, |ck| ck == CapabilityKind::Write)
+                filter_borrowed_places_by_capability(&borrow_capabilities, |ck| {
+                    ck == CapabilityKind::Write
+                })
             };
             owned_write.extend(borrowed_write.drain());
             owned_write
@@ -50,11 +54,15 @@ impl PeepholeMutator for ReadFromWriteOnly {
             let borrows_state = next.borrows.post_main();
             let mut owned_write = {
                 let owned_capabilities = next.states.post_main();
-                filter_owned_places_by_capability(&owned_capabilities, |ck| ck == CapabilityKind::Write)
+                filter_owned_places_by_capability(&owned_capabilities, |ck| {
+                    ck == CapabilityKind::Write
+                })
             };
             let mut borrowed_write = {
                 let borrow_capabilities = borrows_state.capabilities();
-                filter_borrowed_places_by_capability(&borrow_capabilities, |ck| ck == CapabilityKind::Write)
+                filter_borrowed_places_by_capability(&borrow_capabilities, |ck| {
+                    ck == CapabilityKind::Write
+                })
             };
             owned_write.extend(borrowed_write.drain());
             owned_write
@@ -68,11 +76,8 @@ impl PeepholeMutator for ReadFromWriteOnly {
                 let mut mutant_body = body.clone();
 
                 let erased_region = Region::new_from_kind(tcx, RegionKind::ReErased);
-                let borrow_ty = Ty::new_mut_ref(
-                    tcx,
-                    erased_region,
-                    lent_place.ty(&body.local_decls, tcx).ty,
-                );
+                let borrow_ty =
+                    Ty::new_mut_ref(tcx, erased_region, lent_place.ty(&body.local_decls, tcx).ty);
 
                 let fresh_local = fresh_local(&mut mutant_body, borrow_ty);
 

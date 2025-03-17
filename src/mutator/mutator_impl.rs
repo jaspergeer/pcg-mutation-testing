@@ -62,9 +62,7 @@ impl<T: PeepholeMutator> Mutator for T {
                         .statements
                         .iter()
                         .zip(pcg_bb.statements.iter().skip(1))
-                        .flat_map(|(curr, next)| {
-                            T::generate_mutants(tcx, body, curr, next)
-                        })
+                        .flat_map(|(curr, next)| T::generate_mutants(tcx, body, curr, next))
                         .collect::<Vec<_>>()
                 })
             })

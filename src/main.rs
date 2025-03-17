@@ -5,14 +5,15 @@ use pcg_evaluation::mutator::MutantRange;
 use pcg_evaluation::mutator::Mutator;
 
 use pcg_evaluation::mutator::block_mutable_borrow::BlockMutableBorrow;
-use pcg_evaluation::mutator::mutably_lend_shared::MutablyLendShared;
-use pcg_evaluation::mutator::mutably_lend_read::MutablyLendReadOnly;
-use pcg_evaluation::mutator::read_from_write::ReadFromWriteOnly;
-use pcg_evaluation::mutator::write_to_shared::WriteToShared;
-use pcg_evaluation::mutator::write_to_read::WriteToReadOnly;
+use pcg_evaluation::mutator::expiry_order::BorrowExpiryOrder;
+use pcg_evaluation::mutator::expiry_order::AbstractExpiryOrder;
 use pcg_evaluation::mutator::move_from_borrowed::MoveFromBorrowed;
-use pcg_evaluation::mutator::expiry_order::ExpiryOrder;
+use pcg_evaluation::mutator::mutably_lend_read::MutablyLendReadOnly;
+use pcg_evaluation::mutator::mutably_lend_shared::MutablyLendShared;
+use pcg_evaluation::mutator::read_from_write::ReadFromWriteOnly;
 use pcg_evaluation::mutator::shallow_exclusive_read::ShallowExclusiveRead;
+use pcg_evaluation::mutator::write_to_read::WriteToReadOnly;
+use pcg_evaluation::mutator::write_to_shared::WriteToShared;
 
 use pcg_evaluation::utils::env_feature_enabled;
 
@@ -242,7 +243,8 @@ fn run_mutation_tests<'tcx>(
                 mutator_data.instances += 1;
                 let do_borrowck = env_feature_enabled("DO_BORROWCK").unwrap_or(true);
                 catch_fatal_errors(|| {
-                    let borrow_check_info = if rand::random_ratio(numerator, denominator) && do_borrowck
+                    let borrow_check_info = if rand::random_ratio(numerator, denominator)
+                        && do_borrowck
                     {
                         eprintln!(
                             "mutant at {} in {:?}",
@@ -270,7 +272,8 @@ fn run_mutation_tests<'tcx>(
                             }
                         } else {
                             mutator_data.passed += 1;
-                            passed_bodies.insert(def_id, (*mutant_body_with_borrowck_facts.unwrap()).into());
+                            passed_bodies
+                                .insert(def_id, (*mutant_body_with_borrowck_facts.unwrap()).into());
                             BorrowCheckInfo::Passed
                         }
                     } else {
@@ -290,9 +293,9 @@ fn run_mutation_tests<'tcx>(
         }
     }
 
-    let mut mutator_results = HashMap::new();
-    let mut mutants_log = IndexMap::new();
-    let mut passed_bodies = HashMap::new();
+    let mut mutator_results: HashMap<String, MutatorData> = HashMap::new();
+    let mut mutants_log: IndexMap<String, LogEntry> = IndexMap::new();
+    let mut passed_bodies: HashMap<LocalDefId, BodyWithBorrowckFacts<'tcx>> = HashMap::new();
 
     let body_map: HashMap<LocalDefId, BodyWithBorrowckFacts<'tcx>> =
         unsafe { std::mem::transmute(BODIES.take()) };
@@ -398,7 +401,7 @@ fn main() {
     if !std::env::args().any(|arg| arg.starts_with("--edition=")) {
         rustc_args.push("--edition=2018".to_string());
         // TODO add polonius option
-        // rustc_args.push("-Zpolonius".to_string());
+        rustc_args.push("-Zpolonius".to_string());
     }
 
     let results_dir = match std::env::var("RESULTS_DIR") {
@@ -409,15 +412,15 @@ fn main() {
     rustc_args.extend(std::env::args().skip(1));
     let mut callbacks = MutatorCallbacks {
         mutators: vec![
-            Box::new(BlockMutableBorrow),
-            Box::new(MutablyLendShared),
-            Box::new(ReadFromWriteOnly),
-            Box::new(WriteToReadOnly),
-            Box::new(WriteToShared),
-            Box::new(MoveFromBorrowed),
-            Box::new(MutablyLendReadOnly),
-            Box::new(ExpiryOrder),
-            Box::new(ShallowExclusiveRead),
+            Box::new(BorrowExpiryOrder),
+            // Box::new(AbstractExpiryOrder),
+            // Box::new(MutablyLendShared),
+            // Box::new(ReadFromWriteOnly),
+            // Box::new(WriteToReadOnly),
+            // Box::new(WriteToShared),
+            // Box::new(MoveFromBorrowed),
+            // Box::new(MutablyLendReadOnly),
+            // Box::new(ShallowExclusiveRead),
         ],
         results_dir: results_dir,
     };

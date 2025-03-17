@@ -30,7 +30,9 @@ impl PeepholeMutator for WriteToShared {
     ) -> Vec<Mutant<'tcx>> {
         let shared_in_curr = {
             let borrows_graph = curr.borrows.post_main().graph();
-            borrowed_places(borrows_graph, is_shared).map(|(place, _)| place).collect::<HashSet<_>>()
+            borrowed_places(borrows_graph, is_shared)
+                .map(|(place, _)| place)
+                .collect::<HashSet<_>>()
         };
 
         let shared_in_next = {
@@ -50,7 +52,7 @@ impl PeepholeMutator for WriteToShared {
                     source_info: bogus_source_info(&mutant_body),
                     kind: StatementKind::Assign(Box::new((
                         shared_place,
-                        Rvalue::Len(shared_place)
+                        Rvalue::Len(shared_place),
                     ))),
                 };
                 let info = format!(
