@@ -9,7 +9,6 @@ use super::utils::local_node_to_current_place;
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::collections::VecDeque;
 
 use super::mutator_impl::Mutant;
 use super::mutator_impl::MutantLocation;
@@ -54,37 +53,38 @@ use pcs::borrow_pcg::edge_data::EdgeData;
 use pcs::borrow_pcg::graph::BorrowsGraph;
 use pcs::borrow_pcg::region_projection::RegionProjection;
 
-fn expiry_order<'tcx, 'mir>(
+fn order_by_expiry<'tcx, 'mir>(
     borrows_graph: &BorrowsGraph<'tcx>,
     repacker: PlaceRepacker<'mir, 'tcx>,
     loc: &PcgLocation<'tcx>,
-) -> Vec<HashSet<Place<'tcx>>> {
-    // TODO visit NODES rather than edges and increment only if the node is NOT REMOTE + edge is blocking (mut)
-    // TODO really what we are looking for are borrow edges,
-    // should this list include the leaves???
-    // how do we do this when all the nodes are diff types
-    let mut to_visit: VecDeque<(PCGNode<'_>, usize)> = borrows_graph
+) -> Vec<Place<'tcx>> {
+    let mut ordered_places: Vec<Place<'tcx>> = vec![];
+
+    let mut to_visit: Vec<PCGNode<'tcx>> = borrows_graph
         .frozen_graph()
         .leaf_nodes(repacker)
         .map(BlockedNode::from)
-        .map(|node| (node, 0))
         .collect();
 
-    let leaves: Vec<_> = borrows_graph
-        .frozen_graph()
-        .leaf_nodes(repacker)
+    let mut blocking_map: HashMap<PCGNode<'tcx>, usize> = HashMap::new();
+    for edge in borrows_graph.edges() {
+        for node in edge.blocked_nodes(repacker) {
+            let count = blocking_map.entry(node).or_insert(0);
+            let num_nodes_blocking = edge.blocked_by_nodes(repacker).len();
+            *count += num_nodes_blocking;
+        }
+    }
+
+    let mut to_visit: Vec<PCGNode<'tcx>> = borrows_graph
+        .nodes(repacker)
+        .drain()
+        .filter(|node| !blocking_map.contains_key(node))
         .collect();
 
-    let mut place_depths: HashMap<Place<'_>, usize> = HashMap::new();
-    let mut max_depth = 0;
-
-    while let Some((curr, depth)) = to_visit.pop_front() {
-        eprintln!("SOURCE: {:?}", repacker.body().source.instance);
-        eprintln!("LOC: {:?} VISIT (sort): {:?}", loc.location, curr);
-        max_depth = std::cmp::max(max_depth, depth);
+    while let Some(curr) = to_visit.pop() {
         if let Some(place) = pcg_node_to_current_place(curr) {
             if has_named_local(place, repacker.body()) {
-                place_depths.insert(place, depth);
+                ordered_places.push(place);
             }
         }
 
@@ -96,25 +96,19 @@ fn expiry_order<'tcx, 'mir>(
 
         for edge in blocked_edges {
             let mut blocked_nodes = edge.blocked_nodes(repacker);
-            let mut new_nodes = blocked_nodes.drain().map(|node| (node, depth + 1));
-            to_visit.extend(new_nodes);
+            for node in blocked_nodes.drain() {
+                let count = blocking_map.get_mut(&node).unwrap();
+                *count -= 1;
+                if *count == 0 {
+                    blocking_map.remove(&node);
+                    to_visit.push(node);
+                }
+            }
         }
     }
+    assert!(blocking_map.is_empty());
 
-    let mut buckets: Vec<HashSet<Place<'_>>> = vec![];
-
-    for i in (0..max_depth + 1) {
-        buckets.push(HashSet::new());
-    }
-
-    for (place, depth) in place_depths.iter() {
-        buckets.get_mut(*depth).unwrap().insert(*place);
-    }
-
-    buckets
-        .drain(..)
-        .filter(|bucket| !bucket.is_empty())
-        .collect()
+    ordered_places
 }
 
 fn places_blocking<'mir, 'tcx>(
@@ -124,9 +118,8 @@ fn places_blocking<'mir, 'tcx>(
     is_blocking_edge: impl Fn(&BorrowPCGEdgeKind) -> bool,
     is_valid_edge: impl Fn(&BorrowPCGEdgeKind) -> bool,
 ) -> HashSet<Place<'tcx>> {
-    // eprintln!("BLOCKING!!!!!!!");
     let node = place.into();
-    let mut to_visit: VecDeque<(BorrowPCGEdgeRef<'_, '_>, bool)> = borrows_graph
+    let mut to_visit: Vec<(BorrowPCGEdgeRef<'_, '_>, bool)> = borrows_graph
         .frozen_graph()
         .get_edges_blocking(node, repacker)
         .drain()
@@ -135,8 +128,7 @@ fn places_blocking<'mir, 'tcx>(
         .collect();
     let mut places: HashSet<Place<'tcx>> = HashSet::new();
 
-    while let Some((curr, mut is_blocking)) = to_visit.pop_front() {
-        eprintln!("VISIT: {:?}", curr);
+    while let Some((curr, mut is_blocking)) = to_visit.pop() {
         is_blocking = is_blocking || is_blocking_edge(curr.kind());
         if is_blocking {
             let mut nodes: Vec<_> = curr
@@ -213,10 +205,7 @@ impl PeepholeMutator for BorrowExpiryOrder {
 
         let repacker = PlaceRepacker::new(&body, tcx);
         let borrows_graph = next.borrows.post_operands().graph();
-        let expiry_sequence: Vec<_> = {
-            let mut expiry_order = expiry_order(&borrows_graph, repacker, next);
-            expiry_order.drain(..).flatten().collect()
-        };
+        let expiry_sequence = order_by_expiry(&borrows_graph, repacker, next);
 
         let mut mutant_sequences = vec![];
         let is_borrow_mut =
@@ -243,11 +232,6 @@ impl PeepholeMutator for BorrowExpiryOrder {
             for j in 0..i {
                 if blocking_places.contains(&expiry_sequence[j]) {
                     let mut mutant_body = body.clone();
-                    let mut mutant_sequence = places_to_statements(
-                        tcx,
-                        &mut mutant_body,
-                        expiry_sequence.iter().map(|place| *place),
-                    );
                     let mut mutant_sequence = expiry_sequence.clone();
                     let blocked_statement = mutant_sequence.remove(i);
                     mutant_sequence.insert(j, blocked_statement);
@@ -276,7 +260,7 @@ impl PeepholeMutator for BorrowExpiryOrder {
 
                 let bb_terminator = bb.terminator.take();
                 let tail_bb_index = fresh_basic_block(&mut mutant_body);
-                let mut tail_bb = mutant_body
+                let tail_bb = mutant_body
                     .basic_blocks_mut()
                     .get_mut(tail_bb_index)
                     .unwrap();
@@ -344,35 +328,15 @@ impl PeepholeMutator for BorrowExpiryOrder {
 pub struct AbstractExpiryOrder;
 
 impl PeepholeMutator for AbstractExpiryOrder {
-    // TODO create a sequence that expires borrows in topological order
-    // then, for each place in the chain, place an access in an illegal position in the sequence
-
     fn generate_mutants<'tcx>(
         tcx: TyCtxt<'tcx>,
         body: &Body<'tcx>,
         curr: &PcgLocation<'tcx>,
         next: &PcgLocation<'tcx>,
     ) -> Vec<Mutant<'tcx>> {
-        // TODO there might be some borrows expired at the post operands of next
-        // these will now be expired at the first statement of our new branch
-        // we split between curr and next
-
-        // TODO we could also just mark nodes by depth and then create mutants by
-        // attempting to access a node while all of the nodes in a smaller depth
-        // are still live
-        // when a node is encountered at two depths, take the larger depth
-        //
-        // alternatively, we can top sort with a random seed and mutate from there?
-
         let repacker = PlaceRepacker::new(&body, tcx);
         let borrows_graph = next.borrows.post_operands().graph();
-        // eprintln!();
-        // eprintln!("at: {:?}", &curr.location);
-        let expiry_sequence: Vec<_> = {
-            let mut expiry_order = expiry_order(&borrows_graph, repacker, next);
-            expiry_order.drain(..).flatten().collect()
-        };
-        // eprintln!("expiry order: {:?}", &expiry_sequence);
+        let expiry_sequence = order_by_expiry(&borrows_graph, repacker, next);
 
         let mutably_borrowed_places: HashSet<Place<'tcx>> =
             borrowed_places(&borrows_graph, is_mut)
@@ -399,7 +363,6 @@ impl PeepholeMutator for AbstractExpiryOrder {
                             &mut mutant_body,
                             expiry_sequence.iter().map(|place| *place),
                         );
-                        // eprintln!("mutant sequence {:?}", &mutant_sequence);
                         let blocked_statement = mutant_sequence.remove(i);
                         mutant_sequence.insert(j, blocked_statement);
                         mutant_sequences.push((mutant_sequence, mutant_body));
@@ -433,7 +396,7 @@ impl PeepholeMutator for AbstractExpiryOrder {
                 let bogus_source_info = bogus_source_info(&mutant_body);
 
                 let mutant_bb_index = fresh_basic_block(&mut mutant_body);
-                let mut mutant_bb = mutant_body
+                let mutant_bb = mutant_body
                     .basic_blocks_mut()
                     .get_mut(mutant_bb_index)
                     .unwrap();

@@ -136,7 +136,7 @@ pub(crate) fn fresh_local<'tcx>(body: &mut Body<'tcx>, ty: Ty<'tcx>) -> Local {
         let binding_form = BindingForm::Var(var_binding_form);
         ClearCrossCrate::Set(Box::new(LocalInfo::User(binding_form)))
     };
-    // fresh_local_decl.local_info = local_info;
+    fresh_local_decl.local_info = local_info;
     body.local_decls.push(fresh_local_decl)
 }
 

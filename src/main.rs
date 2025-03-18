@@ -64,8 +64,6 @@ use pcs::combined_pcs::BodyWithBorrowckFacts;
 use pcs::run_combined_pcs;
 use pcs::FpcsOutput;
 
-use rand::Rng;
-
 thread_local! {
     pub static BODIES:
         RefCell<HashMap<LocalDefId, BodyWithBorrowckFacts<'static>>> =
@@ -174,7 +172,7 @@ fn run_pcg_on_all_fns<'mir, 'tcx>(
                         continue;
                     }
 
-                    let output = run_combined_pcs(
+                    let _ = run_combined_pcs(
                         body,
                         tcx,
                         vis_dir.map(|dir| format!("{}/{}", dir, item_name)),
@@ -223,7 +221,7 @@ fn run_mutation_tests<'tcx>(
         mut analysis: FpcsOutput<'mir, 'tcx>,
     ) {
         for mutator in mutators.iter_mut() {
-            let mut mutator_data = mutator_results
+            let mutator_data = mutator_results
                 .entry(mutator.name())
                 .or_insert(MutatorData {
                     instances: 0,
@@ -412,14 +410,14 @@ fn main() {
     rustc_args.extend(std::env::args().skip(1));
     let mut callbacks = MutatorCallbacks {
         mutators: vec![
-            // Box::new(BorrowExpiryOrder),
-            // Box::new(AbstractExpiryOrder),
+            Box::new(BorrowExpiryOrder),
+            Box::new(AbstractExpiryOrder),
             // Box::new(MutablyLendShared),
             // Box::new(ReadFromWriteOnly),
-            Box::new(WriteToReadOnly),
-            Box::new(WriteToShared),
+            // Box::new(WriteToReadOnly),
+            // Box::new(WriteToShared),
             // Box::new(MoveFromBorrowed),
-            Box::new(MutablyLendReadOnly),
+            // Box::new(MutablyLendReadOnly),
             // Box::new(ShallowExclusiveRead),
         ],
         results_dir: results_dir,

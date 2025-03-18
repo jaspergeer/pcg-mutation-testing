@@ -86,9 +86,6 @@ impl PeepholeMutator for ReadFromWriteOnly {
                 let bb = mutant_body.basic_blocks_mut().get_mut(bb_index)?;
                 let statement_source_info = bb.statements.get(statement_index)?.source_info;
 
-                let default_mut_borrow = BorrowKind::Mut {
-                    kind: MutBorrowKind::Default,
-                };
                 let new_read = Statement {
                     source_info: statement_source_info,
                     kind: StatementKind::FakeRead(Box::new((

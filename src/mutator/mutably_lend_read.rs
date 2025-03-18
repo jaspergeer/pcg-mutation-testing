@@ -67,11 +67,11 @@ impl PeepholeMutator for MutablyLendReadOnly {
                     ck == CapabilityKind::Read
                 })
             };
-            // let mut borrowed_read = {
-            //     let borrow_capabilities = borrows_state.capabilities();
-            //     filter_borrowed_places_by_capability(borrow_capabilities, |ck| ck == CapabilityKind::Read)
-            // };
-            // owned_read.extend(borrowed_read.drain());
+            let mut borrowed_read = {
+                let borrow_capabilities = borrows_state.capabilities();
+                filter_borrowed_places_by_capability(borrow_capabilities, |ck| ck == CapabilityKind::Read)
+            };
+            owned_read.extend(borrowed_read.drain());
             owned_read
         };
 
