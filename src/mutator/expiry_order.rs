@@ -136,6 +136,8 @@ use pcs::borrow_pcg::region_projection::RegionProjection;
 //                   .collect()
 // }
 
+
+// TODO we need to be able to check that we've been through both a mut borrow AND an abstraction edge
 fn places_blocking<'mir, 'tcx>(
     place: Place<'tcx>,
     borrows_graph: &BorrowsGraph<'tcx>,
@@ -261,14 +263,14 @@ impl PeepholeMutator for BorrowExpiryOrder {
                 let owned_capabilities = next.states.post_operands();
                 filter_owned_places_by_capability(&owned_capabilities, repacker, |ck| {
                     // true
-                    !ck.iter().all(|c| c.is_write())
+                    !ck.iter().any(|c| c.is_write())
                 })
             };
             let mut borrowed_init = {
                 let borrows_state = next.borrows.post_operands();
                 filter_borrowed_places_by_capability(&borrows_state, repacker, |ck| {
                     // true
-                    !ck.iter().all(|c| c.is_write())
+                    !ck.iter().any(|c| c.is_write())
                 })
             };
             println!("borrowed_init: {:?}", &borrowed_init);
@@ -277,13 +279,9 @@ impl PeepholeMutator for BorrowExpiryOrder {
         };
 
         let borrows_graph = next.borrows.post_operands().graph();
-        // let mut mutably_borrowed_places: HashSet<Place<'tcx>> =
-        //     borrowed_places(&borrows_graph, is_mut)
-        //     .map(|(place, _)| (*place).into())
-        //     .collect();
-        // println!("mut borrowed: {:?}", mutably_borrowed_places);
 
-        for place in initialized_places.drain() {
+        for place_ref in initialized_places.iter() {
+            let place = *place_ref;
             eprintln!("CURR: {:?}", &place);
             if has_named_local(place, body) {
                 let mut blocking_places = places_blocking(
@@ -302,7 +300,7 @@ impl PeepholeMutator for BorrowExpiryOrder {
                 );
                 for blocking_place in blocking_places.drain() {
                     if has_named_local(blocking_place, body)
-                        /*&& initialized_places.contains(&blocking_place)*/ {
+                        && initialized_places.contains(&blocking_place) {
                         let mut mutant_body = body.clone();
                         let mut mutant_sequence = places_to_statements(
                             tcx,
@@ -404,34 +402,34 @@ impl PeepholeMutator for AbstractExpiryOrder {
         next: &PcgLocation<'tcx>,
     ) -> Vec<Mutant<'tcx>> {
         let repacker = PlaceRepacker::new(&body, tcx);
-        let borrows_graph = next.borrows.post_operands().graph();
 
         let mut mutant_sequences: Vec<(Vec<Statement<'tcx>>, Body<'tcx>)> = vec![];
 
-        // let mut initialized_places = {
-        //     let borrows_state = next.borrows.post_operands();
-        //     let mut owned_init: HashSet<_> = {
-        //         let owned_capabilities = next.states.post_operands();
-        //         filter_owned_places_by_capability(&owned_capabilities, |ck| {
-        //             !ck.is_write()
-        //         })
-        //     };
-        //     let mut borrowed_init = {
-        //         let borrow_capabilities = borrows_state.capabilities();
-        //         filter_borrowed_places_by_capability(&borrow_capabilities, |ck| {
-        //             !ck.is_write()
-        //         })
-        //     };
-        //     owned_init.extend(borrowed_init.drain());
-        //     owned_init
-        // };
+        let mut initialized_places = {
+            let repacker = PlaceRepacker::new(body, tcx);
+            let mut owned_init: HashSet<_> = {
+                let owned_capabilities = next.states.post_operands();
+                filter_owned_places_by_capability(&owned_capabilities, repacker, |ck| {
+                    // true
+                    !ck.iter().any(|c| c.is_write())
+                })
+            };
+            let mut borrowed_init = {
+                let borrows_state = next.borrows.post_operands();
+                filter_borrowed_places_by_capability(&borrows_state, repacker, |ck| {
+                    // true
+                    !ck.iter().any(|c| c.is_write())
+                })
+            };
+            println!("borrowed_init: {:?}", &borrowed_init);
+            owned_init.extend(borrowed_init.drain());
+            owned_init
+        };
 
-        let mut mutably_borrowed_places: HashSet<Place<'tcx>> =
-            borrowed_places(&borrows_graph, is_mut)
-            .map(|(place, _)| (*place).into())
-            .collect();
+        let borrows_graph = next.borrows.post_operands().graph();
 
-        for place in mutably_borrowed_places.drain() {
+        for place_ref in initialized_places.iter() {
+            let place = *place_ref;
             if has_named_local(place, body) {
                 let mut blocking_places = places_blocking(
                     place,
@@ -444,7 +442,8 @@ impl PeepholeMutator for AbstractExpiryOrder {
                     |_| true,
                 );
                 for blocking_place in blocking_places.drain() {
-                    if has_named_local(blocking_place, body) {
+                    if has_named_local(blocking_place, body)
+                        && initialized_places.contains(&blocking_place) {
                         let mut mutant_body = body.clone();
                         let mut mutant_sequence = places_to_statements(
                             tcx,

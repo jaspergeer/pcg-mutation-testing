@@ -5,6 +5,11 @@ pub mod errors;
 pub mod utils;
 pub mod mutator;
 
+use serde_derive::Serialize;
+use serde_derive::Deserialize;
+
+use std::collections::HashSet;
+
 pub fn env_feature_enabled(feature: &str) -> Option<bool> {
     match std::env::var(feature) {
         Ok(val) => {
@@ -20,4 +25,12 @@ pub fn env_feature_enabled(feature: &str) -> Option<bool> {
         },
         Err(_) => None
     }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct MutatorData {
+    pub instances: i64,
+    pub passed: i64,
+    pub failed: i64,
+    pub error_codes: HashSet<String>,
 }

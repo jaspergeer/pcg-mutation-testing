@@ -1,5 +1,7 @@
 #![feature(rustc_private)]
 
+use pcg_evaluation::MutatorData;
+
 use pcg_evaluation::mutator::Mutant;
 use pcg_evaluation::mutator::MutantRange;
 use pcg_evaluation::mutator::Mutator;
@@ -84,14 +86,6 @@ struct LogEntry {
     definition: String,
     range: MutantRange,
     info: String,
-}
-
-#[derive(Serialize)]
-struct MutatorData {
-    instances: i64,
-    passed: i64,
-    failed: i64,
-    error_codes: HashSet<String>,
 }
 
 struct MutatorCallbacks {
