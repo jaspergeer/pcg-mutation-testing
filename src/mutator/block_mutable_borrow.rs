@@ -51,56 +51,68 @@ impl PeepholeMutator for BlockMutableBorrow {
             borrow_kind: BorrowKind,
         ) -> Option<Mutant<'tcx>> {
             let mut mutant_body = body.clone();
-            // let region = Region::new_var(tcx, RegionVid::MAX);
+            let region = Region::new_var(tcx, RegionVid::MAX);
             // let another_region = Region::new_var(tcx, RegionVid::MAX - 1);
 
             let borrow_ty = Ty::new_mut_ref(tcx, region, lent_place.ty(&body.local_decls, tcx).ty);
 
-            let another_fresh_local = fresh_local(&mut mutant_body, borrow_ty);
-            let fresh_local = fresh_local(&mut mutant_body, borrow_ty);
+            let local_a = fresh_local(&mut mutant_body, borrow_ty);
+            let local_b = fresh_local(&mut mutant_body, borrow_ty);
 
             let statement_index = curr.location.statement_index;
 
-            // let place_live = Statement {
-            //     source_info: bogus_source_info(&mutant_body),
-            //     kind: StatementKind::StorageLive(fresh_local),
-            // };
-
-            // let place_dead = Statement {
-            //     source_info: bogus_source_info(&mutant_body),
-            //     kind: StatementKind::StorageDead(fresh_local),
-            // };
-
-            // let fake_read = Statement {
-            //     source_info: bogus_source_info(&mutant_body),
-            //     kind: StatementKind::FakeRead(Box::new((
-            //         FakeReadCause::ForLet(None),
-            //         MirPlace::from(fresh_local),
-            //     ))),
-            // };
-
-            let fresh_local_deref =
-                tcx.mk_place_elem(MirPlace::from(fresh_local), MirPlaceElem::Deref);
-
-            let place_mention = Statement {
+            let a_live = Statement {
                 source_info: bogus_source_info(&mutant_body),
-                kind: StatementKind::PlaceMention(Box::new(MirPlace::from(another_fresh_local))), // lent_place)))
-                                                                                                  // MirPlace::from(fresh_local)))),
+                kind: StatementKind::StorageLive(local_a),
             };
+
+            let b_live = Statement {
+                source_info: bogus_source_info(&mutant_body),
+                kind: StatementKind::StorageLive(local_b),
+            };
+
+            let a_dead = Statement {
+                source_info: bogus_source_info(&mutant_body),
+                kind: StatementKind::StorageDead(local_a),
+            };
+
+            let b_dead = Statement {
+                source_info: bogus_source_info(&mutant_body),
+                kind: StatementKind::StorageDead(local_b),
+            };
+
+            let fake_read_a = Statement {
+                source_info: bogus_source_info(&mutant_body),
+                kind: StatementKind::FakeRead(Box::new((
+                    FakeReadCause::ForLet(None),
+                    MirPlace::from(local_a),
+                ))),
+            };
+
+            let fake_read_b = Statement {
+                source_info: bogus_source_info(&mutant_body),
+                kind: StatementKind::FakeRead(Box::new((
+                    FakeReadCause::ForLet(None),
+                    MirPlace::from(local_b),
+                ))),
+            };
+
+            let deref_local_a =
+                tcx.mk_place_elem(MirPlace::from(local_a), MirPlaceElem::Deref);
 
             let reborrow = Statement {
                 source_info: bogus_source_info(&mutant_body),
                 kind: StatementKind::Assign(Box::new((
-                    MirPlace::from(another_fresh_local),
+                    MirPlace::from(local_b),
                     // Rvalue::Use(Operand::(fresh_local_deref))
-                    Rvalue::Ref(region, borrow_kind, fresh_local_deref),
+                    Rvalue::Ref(region, borrow_kind, deref_local_a),
                 ))),
             };
 
             let new_borrow = Statement {
                 source_info: bogus_source_info(&mutant_body),
                 kind: StatementKind::Assign(Box::new((
-                    MirPlace::from(fresh_local),
+                    MirPlace::from(local_a),
                     Rvalue::Ref(region, borrow_kind, lent_place),
                 ))),
             };
@@ -112,15 +124,14 @@ impl PeepholeMutator for BlockMutableBorrow {
 
             let bb_index = curr.location.block;
             let bb = mutant_body.basic_blocks_mut().get_mut(bb_index)?;
-            // bb.statements.push(place_dead);
-            // bb.statements.insert(statement_index + 2, place_mention);
-            // bb.statements.insert(statement_index, fake_read);
-            // bb.statements.insert(statement_index, new_borrow);
-            // bb.statements.insert(statement_index, place_live);
-            // bb.statements.insert(statement_index + 2, place_mention);
-            // bb.statements.push(reborrow);
+            bb.statements.push(a_dead);
+            bb.statements.push(b_dead);
+            bb.statements.insert(statement_index + 2, fake_read_b);
             bb.statements.insert(statement_index + 2, reborrow);
+            bb.statements.insert(statement_index + 2, b_live);
+            bb.statements.insert(statement_index, fake_read_a);
             bb.statements.insert(statement_index, new_borrow);
+            bb.statements.insert(statement_index, a_live);
 
             let borrow_loc = MutantLocation {
                 basic_block: curr.location.block.index(),
@@ -161,24 +172,24 @@ impl PeepholeMutator for BlockMutableBorrow {
                 let lent_place = PlaceRef::from(*place).to_place(tcx);
                 vec![
                     // TODO Doesn't produce borrow checker violations for some reason
-                    generate_mutant_with_borrow_kind(
-                        tcx,
-                        body,
-                        curr,
-                        lent_place,
-                        region,
-                        BorrowKind::Shared,
-                    ),
                     // generate_mutant_with_borrow_kind(
                     //     tcx,
                     //     body,
                     //     curr,
                     //     lent_place,
                     //     region,
-                    //     BorrowKind::Mut {
-                    //         kind: MutBorrowKind::Default,
-                    //     },
+                    //     BorrowKind::Shared,
                     // ),
+                    generate_mutant_with_borrow_kind(
+                        tcx,
+                        body,
+                        curr,
+                        lent_place,
+                        region,
+                        BorrowKind::Mut {
+                            kind: MutBorrowKind::Default,
+                        },
+                    ),
                 ]
                 .drain(..)
                 .flatten()

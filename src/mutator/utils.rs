@@ -6,6 +6,7 @@ use pcs::borrow_pcg::borrow_pcg_edge::LocalNode;
 use pcs::borrow_pcg::edge::borrow::BorrowEdge;
 use pcs::borrow_pcg::edge::kind::BorrowPCGEdgeKind;
 use pcs::borrow_pcg::graph::BorrowsGraph;
+use pcs::borrow_pcg::state::BorrowsState;
 use pcs::borrow_pcg::region_projection::MaybeRemoteRegionProjectionBase;
 use pcs::borrow_pcg::region_projection::RegionProjection;
 
@@ -46,15 +47,24 @@ use crate::rustc_interface::middle::mir::VarDebugInfoContents;
 
 pub(crate) fn owned_place_capabilities<'mir, 'tcx>(
     owned_capabilities: &CapabilitySummary<'tcx>,
-) -> HashMap<Place<'tcx>, CapabilityKind> {
+    repacker: PlaceRepacker<'_, 'tcx>,
+) -> HashMap<Place<'tcx>, Option<CapabilityKind>> {
     owned_capabilities
         .iter()
         .flat_map(|capability_local| match capability_local {
-            CapabilityLocal::Allocated(projections) => projections
-                .place_capabilities()
-                .iter()
-                .map(|(place, capability)| (*place, *capability))
-                .collect(),
+            CapabilityLocal::Allocated(projections) => {
+                let mut places: HashSet<Place<'tcx>> = projections
+                    .expansions()
+                    .iter()
+                    .flat_map(|(place, expansion)|
+                              place.expansion_places(expansion, repacker))
+                    .collect();
+
+                places
+                    .drain()
+                    .map(|place| (place, projections.get_capability(place)))
+                    .collect()
+            },
             CapabilityLocal::Unallocated => HashMap::<_, _>::default(),
         })
         .collect()
@@ -62,42 +72,45 @@ pub(crate) fn owned_place_capabilities<'mir, 'tcx>(
 
 pub(crate) fn filter_owned_places_by_capability<'mir, 'tcx>(
     owned_capabilities: &CapabilitySummary<'tcx>,
-    p: impl Fn(CapabilityKind) -> bool,
+    repacker: PlaceRepacker<'_, 'tcx>,
+    p: impl Fn(Option<CapabilityKind>) -> bool,
 ) -> HashSet<Place<'tcx>> {
-    owned_place_capabilities(owned_capabilities)
+    owned_place_capabilities(owned_capabilities, repacker)
         .iter()
         .flat_map(|(place, capability)| if p(*capability) { Some(*place) } else { None })
         .collect()
 }
 
 pub(crate) fn borrowed_place_capabilities<'mir, 'tcx>(
-    borrow_capabilities: &BorrowPCGCapabilities<'tcx>,
-) -> HashMap<Place<'tcx>, CapabilityKind> {
-    borrow_capabilities
+    borrows_state: &BorrowsState<'tcx>,
+    repacker: PlaceRepacker<'_, 'tcx>,
+) -> HashMap<Place<'tcx>, Option<CapabilityKind>> {
+    let frozen_graph = borrows_state.frozen_graph();
+    let capability_map = frozen_graph
+        .nodes(repacker)
         .iter()
-        .flat_map(|(pcg_node, node_capability)| {
-            maybe_old_place_to_current_place(pcg_node).map(|place| (place, node_capability))
+        .flat_map(|node_ref| match *node_ref {
+            PCGNode::Place(maybe_remote_place) => maybe_remote_place.as_local_place(),
+            _ => None,
         })
-        .collect()
+        .map(|local_place| (local_place, borrows_state.get_capability(local_place)))
+        .flat_map(|(local_place, capability)| match local_place.as_current_place() {
+            Some(current_place) => Some((current_place, capability)),
+            _ => None,
+        })
+        .collect();
+    capability_map
 }
 
 pub(crate) fn filter_borrowed_places_by_capability<'mir, 'tcx>(
-    borrow_capabilities: &BorrowPCGCapabilities<'tcx>,
-    p: impl Fn(CapabilityKind) -> bool,
+    borrows_state: &BorrowsState<'tcx>,
+    repacker: PlaceRepacker<'_, 'tcx>,
+    p: impl Fn(Option<CapabilityKind>) -> bool,
 ) -> HashSet<Place<'tcx>> {
-    borrowed_place_capabilities(borrow_capabilities)
+    borrowed_place_capabilities(borrows_state, repacker)
         .iter()
         .flat_map(|(place, capability)| if p(*capability) { Some(*place) } else { None })
         .collect()
-}
-
-fn maybe_old_place_to_current_place<'tcx>(
-    maybe_old_place: MaybeOldPlace<'tcx>,
-) -> Option<Place<'tcx>> {
-    match maybe_old_place {
-        MaybeOldPlace::Current { place } => Some(place),
-        _ => None,
-    }
 }
 
 pub(crate) fn pcg_node_to_current_place<'tcx>(pcg_node: PCGNode<'tcx>) -> Option<Place<'tcx>> {
@@ -109,7 +122,7 @@ pub(crate) fn pcg_node_to_current_place<'tcx>(pcg_node: PCGNode<'tcx>) -> Option
                 .base()
                 .try_into()
                 .ok()?;
-            maybe_old_place_to_current_place(maybe_old_place)
+            maybe_old_place.as_current_place()
         },
     }
 }
@@ -117,9 +130,9 @@ pub(crate) fn pcg_node_to_current_place<'tcx>(pcg_node: PCGNode<'tcx>) -> Option
 pub(crate) fn local_node_to_current_place<'tcx>(pcg_node: LocalNode<'tcx>) -> Option<Place<'tcx>> {
     match pcg_node {
         PCGNode::Place(maybe_old_place) =>
-            maybe_old_place_to_current_place(maybe_old_place),
+            maybe_old_place.as_current_place(),
         PCGNode::RegionProjection(region_projection) =>
-            maybe_old_place_to_current_place(region_projection.base()),
+            region_projection.base().as_current_place(),
     }
 }
 
@@ -172,7 +185,7 @@ pub(crate) fn borrowed_places<'graph, 'tcx>(
             BorrowPCGEdgeKind::Borrow(borrow_edge) => match borrow_edge {
                 BorrowEdge::Local(local_borrow) => {
                     if borrow_edge.kind().iter().any(|kind| p(*kind)) {
-                        let place = maybe_old_place_to_current_place(local_borrow.blocked_place)?;
+                        let place = local_borrow.blocked_place.as_current_place()?;
                         let region = local_borrow.region;
                         Some((place, region))
                     } else {

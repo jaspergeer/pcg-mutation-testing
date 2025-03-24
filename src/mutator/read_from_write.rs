@@ -22,6 +22,7 @@ use crate::rustc_interface::middle::ty::TyCtxt;
 
 use pcs::free_pcs::CapabilityKind;
 use pcs::free_pcs::PcgLocation;
+use pcs::utils::PlaceRepacker;
 
 pub struct ReadFromWriteOnly;
 
@@ -33,17 +34,17 @@ impl PeepholeMutator for ReadFromWriteOnly {
         next: &PcgLocation<'tcx>,
     ) -> Vec<Mutant<'tcx>> {
         let write_only_in_curr = {
-            let borrows_state = curr.borrows.post_main();
+            let repacker = PlaceRepacker::new(body, tcx);
             let mut owned_write = {
                 let owned_capabilities = curr.states.post_main();
-                filter_owned_places_by_capability(&owned_capabilities, |ck| {
-                    ck == CapabilityKind::Write
+                filter_owned_places_by_capability(&owned_capabilities, repacker, |ck| {
+                    ck == Some(CapabilityKind::Write)
                 })
             };
             let mut borrowed_write = {
-                let borrow_capabilities = borrows_state.capabilities();
-                filter_borrowed_places_by_capability(&borrow_capabilities, |ck| {
-                    ck == CapabilityKind::Write
+                let borrows_state = curr.borrows.post_main();
+                filter_borrowed_places_by_capability(&borrows_state, repacker, |ck| {
+                    ck == Some(CapabilityKind::Write)
                 })
             };
             owned_write.extend(borrowed_write.drain());
@@ -51,17 +52,17 @@ impl PeepholeMutator for ReadFromWriteOnly {
         };
 
         let write_only_in_next = {
-            let borrows_state = next.borrows.post_main();
+            let repacker = PlaceRepacker::new(body, tcx);
             let mut owned_write = {
                 let owned_capabilities = next.states.post_main();
-                filter_owned_places_by_capability(&owned_capabilities, |ck| {
-                    ck == CapabilityKind::Write
+                filter_owned_places_by_capability(&owned_capabilities, repacker, |ck| {
+                    ck == Some(CapabilityKind::Write)
                 })
             };
             let mut borrowed_write = {
-                let borrow_capabilities = borrows_state.capabilities();
-                filter_borrowed_places_by_capability(&borrow_capabilities, |ck| {
-                    ck == CapabilityKind::Write
+                let borrows_state = next.borrows.post_main();
+                filter_borrowed_places_by_capability(&borrows_state, repacker, |ck| {
+                    ck == Some(CapabilityKind::Write)
                 })
             };
             owned_write.extend(borrowed_write.drain());

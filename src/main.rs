@@ -104,7 +104,7 @@ fn mir_borrowck<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> ProvidedValue<'t
         let consumer_opts = consumers::ConsumerOptions::PoloniusInputFacts;
         consumers::get_body_with_borrowck_facts(tcx, def_id, consumer_opts)
     };
-    // eprintln!("{:?}", &body_with_facts.body);
+    eprintln!("{:?}", &body_with_facts.body);
     unsafe {
         let body: BodyWithBorrowckFacts<'tcx> = body_with_facts.into();
         let body: BodyWithBorrowckFacts<'static> = std::mem::transmute(body);
@@ -229,7 +229,6 @@ fn run_mutation_tests<'tcx>(
                     failed: 0,
                     error_codes: HashSet::new(),
                 });
-            eprintln!("working dir {}", std::env::current_dir().unwrap().display());
             let body = &body_with_borrowck_facts.body;
             let promoted = &body_with_borrowck_facts.promoted;
 
@@ -249,7 +248,7 @@ fn run_mutation_tests<'tcx>(
                             serde_json::to_value(&range).unwrap(),
                             def_id
                         );
-                        eprintln!("INFO {:?}", &info);
+                        // eprintln!("INFO {:?}", &info);
                         track_body_error_codes(def_id);
 
                         let (borrowck_result, mutant_body_with_borrowck_facts) = {
@@ -419,6 +418,7 @@ fn main() {
             // Box::new(MoveFromBorrowed),
             // Box::new(MutablyLendReadOnly),
             // Box::new(ShallowExclusiveRead),
+            // Box::new(BlockMutableBorrow),
         ],
         results_dir: results_dir,
     };

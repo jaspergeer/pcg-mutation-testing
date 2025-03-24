@@ -42,17 +42,17 @@ impl PeepholeMutator for MutablyLendReadOnly {
         next: &PcgLocation<'tcx>,
     ) -> Vec<Mutant<'tcx>> {
         let read_only_in_curr = {
-            let borrows_state = curr.borrows.post_main();
+            let repacker = PlaceRepacker::new(body, tcx);
             let mut owned_read = {
                 let owned_capabilities = curr.states.post_main();
-                filter_owned_places_by_capability(&owned_capabilities, |ck| {
-                    ck == CapabilityKind::Read
+                filter_owned_places_by_capability(&owned_capabilities, repacker, |ck| {
+                    ck == Some(CapabilityKind::Read)
                 })
             };
             let mut borrowed_read = {
-                let borrow_capabilities = borrows_state.capabilities();
-                filter_borrowed_places_by_capability(&borrow_capabilities, |ck| {
-                    ck == CapabilityKind::Read
+                let borrows_state = curr.borrows.post_main();
+                filter_borrowed_places_by_capability(&borrows_state, repacker, |ck| {
+                    ck == Some(CapabilityKind::Read)
                 })
             };
             owned_read.extend(borrowed_read.drain());
@@ -60,16 +60,18 @@ impl PeepholeMutator for MutablyLendReadOnly {
         };
 
         let read_only_in_next = {
-            let borrows_state = next.borrows.post_main();
+            let repacker = PlaceRepacker::new(body, tcx);
             let mut owned_read = {
                 let owned_capabilities = next.states.post_main();
-                filter_owned_places_by_capability(&owned_capabilities, |ck| {
-                    ck == CapabilityKind::Read
+                filter_owned_places_by_capability(&owned_capabilities, repacker, |ck| {
+                    ck == Some(CapabilityKind::Read)
                 })
             };
             let mut borrowed_read = {
-                let borrow_capabilities = borrows_state.capabilities();
-                filter_borrowed_places_by_capability(borrow_capabilities, |ck| ck == CapabilityKind::Read)
+                let borrows_state = next.borrows.post_main();
+                filter_borrowed_places_by_capability(&borrows_state, repacker, |ck| {
+                    ck == Some(CapabilityKind::Read)
+                })
             };
             owned_read.extend(borrowed_read.drain());
             owned_read
