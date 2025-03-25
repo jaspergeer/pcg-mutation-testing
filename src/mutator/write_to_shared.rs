@@ -36,7 +36,7 @@ impl PeepholeMutator for WriteToShared {
         };
 
         let shared_in_next = {
-            let borrows_graph = next.borrows.post_main().graph();
+            let borrows_graph = next.borrows.post_operands().graph();
             borrowed_places(borrows_graph, is_shared)
         };
 

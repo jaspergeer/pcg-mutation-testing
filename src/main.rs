@@ -16,6 +16,7 @@ use pcg_evaluation::mutator::read_from_write::ReadFromWriteOnly;
 use pcg_evaluation::mutator::shallow_exclusive_read::ShallowExclusiveRead;
 use pcg_evaluation::mutator::write_to_read::WriteToReadOnly;
 use pcg_evaluation::mutator::write_to_shared::WriteToShared;
+use pcg_evaluation::mutator::drop_borrowed::DropBorrowed;
 
 use pcg_evaluation::utils::env_feature_enabled;
 
@@ -98,7 +99,7 @@ fn mir_borrowck<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> ProvidedValue<'t
         let consumer_opts = consumers::ConsumerOptions::PoloniusInputFacts;
         consumers::get_body_with_borrowck_facts(tcx, def_id, consumer_opts)
     };
-    eprintln!("{:?}", &body_with_facts.body);
+    // eprintln!("{:?}", &body_with_facts.body);
     unsafe {
         let body: BodyWithBorrowckFacts<'tcx> = body_with_facts.into();
         let body: BodyWithBorrowckFacts<'static> = std::mem::transmute(body);
@@ -176,7 +177,7 @@ fn run_pcg_on_all_fns<'mir, 'tcx>(
             }
 
             unsupported_item_kind => {
-                eprintln!("Unsupported item: {unsupported_item_kind:?}");
+                // eprintln!("Unsupported item: {unsupported_item_kind:?}");
             }
         }
     }
@@ -221,6 +222,7 @@ fn run_mutation_tests<'tcx>(
                     instances: 0,
                     passed: 0,
                     failed: 0,
+                    panicked: 0,
                     error_codes: HashSet::new(),
                 });
             let body = &body_with_borrowck_facts.body;
@@ -229,20 +231,20 @@ fn run_mutation_tests<'tcx>(
             let (numerator, denominator) = mutator.run_ratio();
             let mutants = mutator.generate_mutants(tcx, &mut analysis, &body);
 
-            eprintln!("running mutator for {:?}", &def_id);
+            // eprintln!("running mutator for {:?}", &def_id);
             for Mutant { body, range, info } in mutants {
                 mutator_data.instances += 1;
                 let do_borrowck = env_feature_enabled("DO_BORROWCK").unwrap_or(true);
-                catch_fatal_errors(|| {
+                // don't do this at home, kids
+                let maybe_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let borrow_check_info = if rand::random_ratio(numerator, denominator)
                         && do_borrowck
                     {
-                        eprintln!(
-                            "mutant at {} in {:?}",
-                            serde_json::to_value(&range).unwrap(),
-                            def_id
-                        );
-                        // eprintln!("INFO {:?}", &info);
+                        // eprintln!(
+                        //     "mutant at {} in {:?}",
+                        //     serde_json::to_value(&range).unwrap(),
+                        //     def_id
+                        // );
                         track_body_error_codes(def_id);
 
                         let (borrowck_result, mutant_body_with_borrowck_facts) = {
@@ -279,7 +281,11 @@ fn run_mutation_tests<'tcx>(
                     };
                     mutants_log.insert(mutants_log.len().to_string(), log_entry);
                     compiler.sess.dcx().reset_err_count(); // cursed
-                });
+                }));
+
+                if let Err(_) = maybe_panic {
+                    mutator_data.panicked += 1;
+                }
             }
         }
     }
@@ -318,7 +324,7 @@ fn run_mutation_tests<'tcx>(
                 );
             }
             unsupported_item_kind => {
-                eprintln!("Unsupported item: {unsupported_item_kind:?}");
+                // eprintln!("Unsupported item: {unsupported_item_kind:?}");
             }
         }
     }
@@ -405,14 +411,15 @@ fn main() {
         mutators: vec![
             Box::new(BorrowExpiryOrder),
             Box::new(AbstractExpiryOrder),
-            // Box::new(MutablyLendShared),
-            // Box::new(ReadFromWriteOnly),
-            // Box::new(WriteToReadOnly),
-            // Box::new(WriteToShared),
-            // Box::new(MoveFromBorrowed),
-            // Box::new(MutablyLendReadOnly),
+            Box::new(MutablyLendShared),
+            Box::new(ReadFromWriteOnly),
+            Box::new(WriteToReadOnly),
+            Box::new(WriteToShared),
+            Box::new(MoveFromBorrowed),
+            Box::new(MutablyLendReadOnly),
             // Box::new(ShallowExclusiveRead),
-            // Box::new(BlockMutableBorrow),
+            Box::new(BlockMutableBorrow),
+            // Box::new(DropBorrowed),
         ],
         results_dir: results_dir,
     };

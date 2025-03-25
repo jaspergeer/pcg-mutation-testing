@@ -194,13 +194,6 @@ fn places_to_statements<'tcx>(
             let target = fresh_local(body, target_ty);
             Statement {
                 source_info: bogus_source_info(body),
-                // kind: StatementKind::FakeRead(Box::new((
-                //     FakeReadCause::ForLet(None),
-                //     mir_place,
-                // ))),
-                // kind: StatementKind::PlaceMention(Box::new(
-                //     mir_place
-                // ))
                 kind: StatementKind::Assign(Box::new((
                     MirPlace::from(target),
                     Rvalue::Ref(region, BorrowKind::Shared, mir_place),
@@ -227,14 +220,12 @@ impl PeepholeMutator for BorrowExpiryOrder {
             let mut owned_init: HashSet<_> = {
                 let owned_capabilities = next.states.post_operands();
                 filter_owned_places_by_capability(&owned_capabilities, repacker, |ck| {
-                    // true
                     !ck.iter().any(|c| c.is_write())
                 })
             };
             let mut borrowed_init = {
                 let borrows_state = next.borrows.post_operands();
                 filter_borrowed_places_by_capability(&borrows_state, repacker, |ck| {
-                    // true
                     !ck.iter().any(|c| c.is_write())
                 })
             };

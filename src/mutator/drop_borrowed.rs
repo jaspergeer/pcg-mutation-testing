@@ -1,8 +1,9 @@
 use super::utils::borrowed_places;
+use super::utils::bogus_source_info;
 use super::utils::filter_borrowed_places_by_capability;
 use super::utils::filter_owned_places_by_capability;
 use super::utils::fresh_local;
-use super::utils::is_mut;
+use super::utils::fresh_basic_block;
 
 use std::collections::HashSet;
 
@@ -21,6 +22,9 @@ use crate::rustc_interface::middle::mir::PlaceRef;
 use crate::rustc_interface::middle::mir::Rvalue;
 use crate::rustc_interface::middle::mir::Statement;
 use crate::rustc_interface::middle::mir::StatementKind;
+use crate::rustc_interface::middle::mir::UnwindAction;
+use crate::rustc_interface::middle::mir::Terminator;
+use crate::rustc_interface::middle::mir::TerminatorKind;
 use crate::rustc_interface::middle::ty::Region;
 use crate::rustc_interface::middle::ty::RegionKind;
 use crate::rustc_interface::middle::ty::Ty;
@@ -29,9 +33,9 @@ use crate::rustc_interface::middle::ty::TyCtxt;
 use pcs::free_pcs::CapabilityKind;
 use pcs::free_pcs::PcgLocation;
 
-pub struct MoveFromBorrowed;
+pub struct DropBorrowed;
 
-impl PeepholeMutator for MoveFromBorrowed {
+impl PeepholeMutator for DropBorrowed {
     fn generate_mutants<'tcx>(
         tcx: TyCtxt<'tcx>,
         body: &Body<'tcx>,
@@ -40,14 +44,14 @@ impl PeepholeMutator for MoveFromBorrowed {
     ) -> Vec<Mutant<'tcx>> {
         let lent_in_curr = {
             let borrows_graph = curr.borrows.post_main().graph();
-            borrowed_places(borrows_graph, is_mut)
+            borrowed_places(borrows_graph, |_| true)
                 .map(|(place, _)| place)
                 .collect::<HashSet<_>>()
         };
 
         let lent_in_next = {
             let borrows_graph = next.borrows.post_operands().graph();
-            borrowed_places(borrows_graph, is_mut)
+            borrowed_places(borrows_graph, |_| true)
                 .map(|(place, _)| place)
                 .collect::<HashSet<_>>()
         };
@@ -57,30 +61,49 @@ impl PeepholeMutator for MoveFromBorrowed {
             .filter(|place| lent_in_next.contains(place))
             .flat_map(|place| {
                 let mut mutant_body = body.clone();
+                let bogus_source_info = bogus_source_info(&mutant_body);
+                let curr_bb_index = curr.location.block;
+                let bb = mutant_body
+                    .basic_blocks_mut()
+                    .get_mut(curr_bb_index)
+                    .unwrap();
+                let mut tail_statements = bb
+                    .statements
+                    .drain(next.location.statement_index..)
+                    .collect();
+
+                let bb_terminator = bb.terminator.take();
+                let tail_bb_index = fresh_basic_block(&mut mutant_body);
+                let mut tail_bb = mutant_body
+                    .basic_blocks_mut()
+                    .get_mut(tail_bb_index)
+                    .unwrap();
+                tail_bb.statements.append(&mut tail_statements);
+                tail_bb.terminator = bb_terminator;
+
                 let lent_place = PlaceRef::from(**place).to_place(tcx);
 
-                let lent_place_ty = lent_place.ty(&body.local_decls, tcx).ty;
+                let bb = mutant_body
+                    .basic_blocks_mut()
+                    .get_mut(curr_bb_index)
+                    .unwrap();
+                bb.terminator = Some(Terminator {
+                    source_info: bogus_source_info,
+                    kind: TerminatorKind::Drop {
+                        place: lent_place,
+                        target: tail_bb_index,
+                        unwind: UnwindAction::Continue,
+                        replace: false,
+                    },
+                });
 
-                let fresh_local = fresh_local(&mut mutant_body, lent_place_ty);
-
-                let statement_index = curr.location.statement_index;
-                let bb_index = curr.location.block;
-                let bb = mutant_body.basic_blocks_mut().get_mut(bb_index)?;
-                let statement_source_info = bb.statements.get(statement_index)?.source_info;
-
-                let new_move = Statement {
-                    source_info: statement_source_info,
-                    kind: StatementKind::Assign(Box::new((
-                        MirPlace::from(fresh_local),
-                        Rvalue::Use(Operand::Move(lent_place)),
-                    ))),
-                };
-                let info = format!("{:?} was lent, so inserted {:?}", lent_place, &new_move);
-                bb.statements.insert(statement_index + 1, new_move);
+                let info = format!("{:?} was lent, so dropped it at index {:?}",
+                                   lent_place,
+                                   curr.location.statement_index);
 
                 let borrow_loc = MutantLocation {
                     basic_block: curr.location.block.index(),
-                    statement_index: statement_index + 1,
+                    statement_index: curr.location.statement_index,
                 };
 
                 Some(Mutant {
@@ -100,6 +123,6 @@ impl PeepholeMutator for MoveFromBorrowed {
     }
 
     fn name(&mut self) -> String {
-        "move-from-borrowed".into()
+        "drop-borrowed".into()
     }
 }

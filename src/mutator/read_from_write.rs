@@ -54,13 +54,13 @@ impl PeepholeMutator for ReadFromWriteOnly {
         let write_only_in_next = {
             let repacker = PlaceRepacker::new(body, tcx);
             let mut owned_write = {
-                let owned_capabilities = next.states.post_main();
+                let owned_capabilities = next.states.post_operands();
                 filter_owned_places_by_capability(&owned_capabilities, repacker, |ck| {
                     ck == Some(CapabilityKind::Write)
                 })
             };
             let mut borrowed_write = {
-                let borrows_state = next.borrows.post_main();
+                let borrows_state = next.borrows.post_operands();
                 filter_borrowed_places_by_capability(&borrows_state, repacker, |ck| {
                     ck == Some(CapabilityKind::Write)
                 })

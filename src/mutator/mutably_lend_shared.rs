@@ -40,7 +40,7 @@ impl PeepholeMutator for MutablyLendShared {
         };
 
         let immutably_lent_in_next = {
-            let borrows_graph = next.borrows.post_main().graph();
+            let borrows_graph = next.borrows.post_operands().graph();
             borrowed_places(borrows_graph, is_shared)
                 .map(|(place, _)| place)
                 .collect::<HashSet<_>>()

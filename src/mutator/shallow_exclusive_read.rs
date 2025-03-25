@@ -55,13 +55,13 @@ impl PeepholeMutator for ShallowExclusiveRead {
         let shallow_exclusive_in_next = {
             let repacker = PlaceRepacker::new(body, tcx);
             let mut owned_shallow_exclusive = {
-                let owned_capabilities = next.states.post_main();
+                let owned_capabilities = next.states.post_operands();
                 filter_owned_places_by_capability(&owned_capabilities, repacker, |ck| {
                     ck == Some(CapabilityKind::ShallowExclusive)
                 })
             };
             let mut borrowed_shallow_exclusive = {
-                let borrows_state = next.borrows.post_main();
+                let borrows_state = next.borrows.post_operands();
                 filter_borrowed_places_by_capability(&borrows_state, repacker, |ck| {
                     ck == Some(CapabilityKind::ShallowExclusive)
                 })
