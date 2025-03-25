@@ -2,15 +2,20 @@ use serde_derive::{Deserialize, Serialize};
 
 mod common;
 use common::{get, run_on_crate};
+use common::{RunOnCrateOptions, Target};
 
 use std::fs::File;
 use std::io::Write;
-
+use std::ops::Range;
 use std::path::Path;
+use std::path::PathBuf;
+
+use chrono::Local;
+use derive_more::Deref;
 
 #[test]
 pub fn top_crates() {
-    top_crates_range(0..500);
+    top_crates_range(0..100, "2025-03-13");
 }
 
 #[derive(Serialize)]
@@ -21,21 +26,26 @@ struct TopCratesResult {
 
 const MAX_CONCURRENT_THREADS: usize = 10;
 
-pub fn top_crates_range(range: std::ops::Range<usize>) {
+pub fn top_crates_range(range: Range<usize>, date: &str) {
     let mut stats = TopCratesResult { succeeded: vec![], failed: vec![] };
     if let Ok(str) = std::env::var("RESULTS_DIR") {
         std::fs::create_dir_all("tmp").unwrap();
-        let top_crates = CratesIter::top(range);
+        let mut top_crates: Vec<_> = Crates::top(range, date).to_vec();
         let mut thunks: Vec<_> = top_crates
-            .map(|(i, krate)| {
+            .drain(..)
+            .map(|krate| {
                 let results_dir = str.to_string();
                 let version = krate.version.unwrap_or(krate.newest_version);
-                println!("Starting: {i} ({})", krate.name);
+                let date_string = date.to_string();
                 (krate.name.clone(),
                  || {
                     std::thread::spawn(move || {
                         std::env::set_var("RESULTS_DIR", results_dir);
-                        run_on_crate(&krate.name, &version);
+                        run_on_crate(&krate.name, &version, date_string.as_str(),
+                                     RunOnCrateOptions::RunPCG {
+                                         target: Target::Release,
+                                         validity_checks: false,
+                                     });
                     })
                  })
             }).collect();
@@ -75,9 +85,8 @@ pub fn top_crates_range(range: std::ops::Range<usize>) {
     }
 }
 
-
 /// A create on crates.io.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 struct Crate {
     #[serde(rename = "id")]
     name: String,
@@ -87,58 +96,93 @@ struct Crate {
     newest_version: String,
 }
 
+impl Crate {
+    fn version(&self) -> &str {
+        self.version.as_ref().unwrap_or(&self.newest_version)
+    }
+}
+
 /// The list of crates from crates.io
-#[derive(Debug, Deserialize)]
-struct CratesList {
+#[derive(Debug, Deref, Deserialize)]
+struct Crates {
     crates: Vec<Crate>,
 }
 
 const PAGE_SIZE: usize = 100;
-struct CratesIter {
-    curr_idx: usize,
-    curr_page: usize,
-    crates: Vec<Crate>,
+
+fn download_crates(n: usize) -> Vec<Crate> {
+    let mut all_crates = Vec::new();
+    let mut page = 1;
+
+    while all_crates.len() < n {
+        let url = format!(
+            "https://crates.io/api/v1/crates?page={}&per_page={PAGE_SIZE}&sort=downloads",
+            page,
+        );
+        let resp = get(&url).expect("Could not fetch top crates");
+        assert!(
+            resp.status().is_success(),
+            "Response status: {}",
+            resp.status()
+        );
+        let page_crates = match serde_json::from_reader::<_, Crates>(resp) {
+            Ok(page_crates) => page_crates,
+            Err(e) => panic!("Invalid JSON {e}"),
+        };
+        assert_eq!(page_crates.crates.len(), PAGE_SIZE);
+        all_crates.extend(page_crates.crates);
+        page += 1;
+    }
+
+    all_crates
 }
 
-impl CratesIter {
-    pub fn new(start: usize) -> Self {
-        Self {
-            curr_idx: start,
-            curr_page: start / PAGE_SIZE + 1,
-            crates: Vec::new(),
-        }
-    }
-    pub fn top(range: std::ops::Range<usize>) -> impl Iterator<Item = (usize, Crate)> {
-        Self::new(range.start).take(range.len())
-    }
+fn get_cache_path(date: &str) -> PathBuf {
+    PathBuf::from("tests/top-crates").join(format!("{date}.json"))
 }
 
-impl Iterator for CratesIter {
-    type Item = (usize, Crate);
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.crates.is_empty() {
-            let url = format!(
-                "https://crates.io/api/v1/crates?page={}&per_page={PAGE_SIZE}&sort=downloads",
-                self.curr_page,
+fn read_from_cache(cache_path: &Path) -> Option<Vec<Crate>> {
+    if let Ok(file) = std::fs::File::open(&cache_path) {
+        return Some(serde_json::from_reader::<_, Vec<Crate>>(file).unwrap());
+    }
+    None
+}
+
+fn write_to_cache(cache_path: PathBuf, crates: &[Crate]) {
+    let file = std::fs::File::create(&cache_path).unwrap_or_else(|err| {
+        panic!(
+            "Failed to create cache file {}: {}",
+            cache_path.display(),
+            err
+        );
+    });
+    serde_json::to_writer(file, &crates).unwrap();
+}
+
+impl Crates {
+    pub fn top(range: Range<usize>, date: &str) -> Crates {
+        let today = Local::now().format("%Y-%m-%d").to_string();
+        let cache_path = get_cache_path(date);
+        let crates = read_from_cache(&cache_path).unwrap_or_else(|| {
+            assert_eq!(
+                date.clone(),
+                today,
+                "Cannot get crates from {} because we JSON file {} doesn't exist",
+                date,
+                cache_path.display()
             );
-            let resp = get(&url).expect("Could not fetch top crates");
-            assert!(
-                resp.status().is_success(),
-                "Response status: {}",
-                resp.status()
-            );
-            let page_crates: CratesList = match serde_json::from_reader(resp) {
-                Ok(page_crates) => page_crates,
-                Err(e) => panic!("Invalid JSON {e}"),
-            };
-            assert_eq!(page_crates.crates.len(), PAGE_SIZE);
-            self.crates = page_crates.crates;
-            self.crates.reverse();
-            self.crates
-                .truncate(self.crates.len() - self.curr_idx % PAGE_SIZE);
-            self.curr_page += 1;
+            let crates = download_crates(range.end);
+            write_to_cache(cache_path, &crates);
+            crates
+        });
+        assert!(
+            crates.len() >= (range.end - range.start),
+            "Tried to get {} crates but only had {}",
+            range.end - range.start,
+            crates.len()
+        );
+        Crates {
+            crates: crates[range].to_vec(),
         }
-        self.curr_idx += 1;
-        Some((self.curr_idx - 1, self.crates.pop().unwrap()))
     }
 }

@@ -252,7 +252,7 @@ fn run_mutation_tests<'tcx>(
                         //     serde_json::to_value(&range).unwrap(),
                         //     def_id
                         // );
-                        track_body_error_codes(def_id);
+                        // track_body_error_codes(def_id);
 
                         let (borrowck_result, mutant_body_with_borrowck_facts) = {
                             let consumer_opts = consumers::ConsumerOptions::PoloniusInputFacts;
@@ -319,17 +319,17 @@ fn run_mutation_tests<'tcx>(
                 std::env::set_var("PCG_VALIDITY_CHECKS", "false");
                 let analysis = run_combined_pcs(body_with_borrowck_facts, tcx, None);
 
-                // run_mutation_tests_for_body(
-                //     tcx,
-                //     compiler,
-                //     mutators,
-                //     &mut mutants_log,
-                //     &mut mutator_results,
-                //     &mut passed_bodies,
-                //     def_id,
-                //     body_with_borrowck_facts,
-                //     analysis,
-                // );
+                run_mutation_tests_for_body(
+                    tcx,
+                    compiler,
+                    mutators,
+                    &mut mutants_log,
+                    &mut mutator_results,
+                    &mut passed_bodies,
+                    def_id,
+                    body_with_borrowck_facts,
+                    analysis,
+                );
             }
             unsupported_item_kind => {
                 // eprintln!("Unsupported item: {unsupported_item_kind:?}");
