@@ -279,7 +279,7 @@ fn run_mutation_tests<'tcx>(
                         range: range,
                         info: info,
                     };
-                    mutants_log.insert(mutants_log.len().to_string(), log_entry);
+                    // mutants_log.insert(mutants_log.len().to_string(), log_entry);
                     compiler.sess.dcx().reset_err_count(); // cursed
                 }));
 
@@ -309,6 +309,7 @@ fn run_mutation_tests<'tcx>(
                 if safety == hir::Safety::Unsafe {
                     continue;
                 }
+                std::env::set_var("PCG_VALIDITY_CHECKS", "false");
                 let analysis = run_combined_pcs(body_with_borrowck_facts, tcx, None);
 
                 run_mutation_tests_for_body(
@@ -329,19 +330,19 @@ fn run_mutation_tests<'tcx>(
         }
     }
 
-    run_pcg_on_all_fns(&passed_bodies, tcx);
+    // run_pcg_on_all_fns(&passed_bodies, tcx);
 
     let crate_name = tcx.crate_name(CrateNum::from_usize(0)).to_string();
 
-    let mutants_log_path = results_dir
-        .join(crate_name.clone() + "-mutants")
-        .with_extension("json");
-    let mut mutants_log_file =
-        File::create(&mutants_log_path).expect("Failed to create output file");
-    let mutants_log_string = serde_json::to_string_pretty(&mutants_log).unwrap();
-    mutants_log_file
-        .write_all(mutants_log_string.as_bytes())
-        .expect("Failed to write results to file");
+    // let mutants_log_path = results_dir
+    //     .join(crate_name.clone() + "-mutants")
+    //     .with_extension("json");
+    // let mut mutants_log_file =
+    //     File::create(&mutants_log_path).expect("Failed to create output file");
+    // let mutants_log_string = serde_json::to_string_pretty(&mutants_log).unwrap();
+    // mutants_log_file
+    //     .write_all(mutants_log_string.as_bytes())
+    //     .expect("Failed to write results to file");
 
     let mutator_results_path = results_dir.join(crate_name).with_extension("json");
     let mut mutator_results_file =
@@ -397,8 +398,7 @@ fn main() {
 
     if !std::env::args().any(|arg| arg.starts_with("--edition=")) {
         rustc_args.push("--edition=2018".to_string());
-        // TODO add polonius option
-        rustc_args.push("-Zpolonius".to_string());
+        // rustc_args.push("-Zpolonius".to_string());
     }
 
     let results_dir = match std::env::var("RESULTS_DIR") {

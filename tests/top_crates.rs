@@ -5,7 +5,9 @@ use common::{get, run_on_crate};
 
 #[test]
 pub fn top_crates() {
-    top_crates_range(0..500)
+    for i in 0..50 {
+        top_crates_range((10 * (i))..(10 * (i + 1)));
+    }
 }
 
 pub fn top_crates_range(range: std::ops::Range<usize>) {
