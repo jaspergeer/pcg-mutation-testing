@@ -10,9 +10,7 @@ use std::path::Path;
 
 #[test]
 pub fn top_crates() {
-    for i in 0..50 {
-        top_crates_range((10 * (i))..(10 * (i + 1)));
-    }
+    top_crates_range(0..500);
 }
 
 #[derive(Serialize)]
@@ -21,26 +19,46 @@ struct TopCratesResult {
     failed: Vec<String>,
 }
 
+const MAX_CONCURRENT_THREADS: usize = 10;
+
 pub fn top_crates_range(range: std::ops::Range<usize>) {
     let mut stats = TopCratesResult { succeeded: vec![], failed: vec![] };
     if let Ok(str) = std::env::var("RESULTS_DIR") {
         std::fs::create_dir_all("tmp").unwrap();
         let top_crates = CratesIter::top(range);
-        let handles: Vec<_> = top_crates
+        let mut thunks: Vec<_> = top_crates
             .map(|(i, krate)| {
                 let results_dir = str.to_string();
                 let version = krate.version.unwrap_or(krate.newest_version);
                 println!("Starting: {i} ({})", krate.name);
                 (krate.name.clone(),
-                 std::thread::spawn(move || {
-                     std::env::set_var("RESULTS_DIR", results_dir);
-                     run_on_crate(&krate.name, &version);
-                 }))
+                 || {
+                    std::thread::spawn(move || {
+                        std::env::set_var("RESULTS_DIR", results_dir);
+                        run_on_crate(&krate.name, &version);
+                    })
+                 })
             }).collect();
-        for (name, handle) in handles {
-            match handle.join() {
-                Err(_) => stats.failed.push(name),
-                _ => stats.succeeded.push(name)
+
+        let mut handles: Vec<_> = vec![];
+
+        while !thunks.is_empty() || !handles.is_empty() {
+            if handles.len() < MAX_CONCURRENT_THREADS {
+                if let Some((name, thunk)) = thunks.pop() {
+                    handles.push((name, thunk()))
+                }
+            }
+            for i in 0..handles.len() {
+                if let Some((name, handle)) = handles.get_mut(i) {
+                    if handle.is_finished() {
+                        if let (name, handle) = handles.remove(i) {
+                            match handle.join() {
+                                Err(_) => stats.failed.push(name.clone()),
+                                _ => stats.succeeded.push(name)
+                            }
+                        }
+                    }
+                }
             }
         }
 
