@@ -147,7 +147,7 @@ fn places_blocking<'mir, 'tcx>(
         borrows_graph
         .frozen_graph()
         .get_edges_blocking(node, repacker)
-        .drain()
+        .into_iter()
         .filter(|edge| is_valid_edge(edge.kind()))
         .map(|edge| (edge, HashSet::new()))
         .collect();

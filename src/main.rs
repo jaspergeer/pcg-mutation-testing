@@ -61,7 +61,8 @@ use pcg_evaluation::rustc_interface::hir::def_id::LocalDefId;
 
 use pcg_evaluation::rustc_interface::interface::interface::Compiler;
 use pcg_evaluation::rustc_interface::interface::Config;
-use pcg_evaluation::rustc_interface::interface::Queries;
+
+use pcg_evaluation::rustc_interface::ast::Crate;
 
 use pcs::combined_pcs::BodyWithBorrowckFacts;
 use pcs::run_combined_pcs;
@@ -204,6 +205,12 @@ fn run_mutation_tests<'tcx>(
     mutators: &mut Vec<Box<dyn Mutator + Send>>,
     results_dir: &PathBuf,
 ) {
+    if in_cargo_crate() && std::env::var("CARGO_PRIMARY_PACKAGE").is_err() {
+        // We're running in cargo, but not compiling the primary package
+        // We don't want to check dependencies, so abort
+        return;
+    }
+
     fn run_mutation_tests_for_body<'mir, 'tcx>(
         tcx: TyCtxt<'tcx>,
         compiler: &Compiler,
@@ -362,7 +369,7 @@ impl Callbacks for MutatorCallbacks {
     fn after_crate_root_parsing<'tcx>(
         &mut self,
         compiler: &Compiler,
-        _queries: &'tcx Queries<'tcx>,
+        _crate: &Crate,
     ) -> Compilation {
         let fallback_bundle = fallback_fluent_bundle(DEFAULT_LOCALE_RESOURCES.to_vec(), false);
         compiler
@@ -372,20 +379,9 @@ impl Callbacks for MutatorCallbacks {
         Compilation::Continue
     }
 
-    fn after_analysis<'tcx>(
-        &mut self,
-        compiler: &Compiler,
-        queries: &'tcx Queries<'tcx>,
-    ) -> Compilation {
-        // Don't run mutation testing on dependencies
-        if !(std::env::var("CARGO_CRATE_NAME").is_ok()
-            && std::env::var("CARGO_PRIMARY_PACKAGE").is_err())
-        {
-            queries.global_ctxt().unwrap().enter(|tcx| {
-                run_mutation_tests(tcx, compiler, &mut self.mutators, &self.results_dir)
-            });
-        }
-        if std::env::var("CARGO").is_ok() {
+    fn after_analysis(&mut self, compiler: &Compiler, tcx: TyCtxt<'_>) -> Compilation {
+        run_mutation_tests(tcx, compiler, &mut self.mutators, &self.results_dir);
+        if in_cargo_crate() {
             Compilation::Continue
         } else {
             Compilation::Stop
@@ -393,20 +389,30 @@ impl Callbacks for MutatorCallbacks {
     }
 }
 
+fn in_cargo_crate() -> bool {
+    std::env::var("CARGO_CRATE_NAME").is_ok()
+}
+
 fn main() {
     let mut rustc_args = vec!["rustc".to_string()];
 
     if !std::env::args().any(|arg| arg.starts_with("--edition=")) {
         rustc_args.push("--edition=2018".to_string());
-        // rustc_args.push("-Zpolonius".to_string());
     }
+    if env_feature_enabled("PCG_POLONIUS").unwrap_or(false) {
+        rustc_args.push("-Zpolonius".to_string());
+    }
+    if !in_cargo_crate() {
+        rustc_args.push("-Zno-codegen".to_string());
+    }
+
+    rustc_args.extend(std::env::args().skip(1));
 
     let results_dir = match std::env::var("RESULTS_DIR") {
         Ok(str) => str.into(),
         _ => std::env::current_dir().unwrap(),
     };
 
-    rustc_args.extend(std::env::args().skip(1));
     let mut callbacks = MutatorCallbacks {
         mutators: vec![
             Box::new(BorrowExpiryOrder),

@@ -1,5 +1,5 @@
 [toolchain]
-channel = "pcg-stage2"
+channel = "2024-12-14-super-custom"
 # channel = "nightly-2024-09-15"
 # components = [ "rustc-dev", "llvm-tools-preview", "rust-std", "rustfmt", "clippy" ] 
 # profile = "minimal"
