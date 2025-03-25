@@ -1,6 +1,7 @@
 use super::utils::filter_borrowed_places_by_capability;
 use super::utils::filter_owned_places_by_capability;
 use super::utils::fresh_local;
+use super::utils::has_named_local;
 
 use super::mutator_impl::Mutant;
 use super::mutator_impl::MutantLocation;
@@ -72,6 +73,7 @@ impl PeepholeMutator for ReadFromWriteOnly {
         write_only_in_curr
             .iter()
             .filter(|place| write_only_in_next.contains(place))
+            .filter(|place| has_named_local(**place, body))
             .flat_map(|place| {
                 let lent_place = PlaceRef::from(**place).to_place(tcx);
                 let mut mutant_body = body.clone();

@@ -1,6 +1,7 @@
 use super::utils::filter_borrowed_places_by_capability;
 use super::utils::filter_owned_places_by_capability;
 use super::utils::fresh_local;
+use super::utils::has_named_local;
 
 use super::mutator_impl::Mutant;
 use super::mutator_impl::MutantLocation;

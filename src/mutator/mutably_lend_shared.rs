@@ -1,6 +1,7 @@
 use super::utils::borrowed_places;
 use super::utils::fresh_local;
 use super::utils::is_shared;
+use super::utils::has_named_local;
 
 use std::collections::HashSet;
 
@@ -48,6 +49,7 @@ impl PeepholeMutator for MutablyLendShared {
 
         immutably_lent_in_curr
             .filter(|(place, _)| immutably_lent_in_next.contains(place))
+            .filter(|(place, _)| has_named_local(*place, body))
             .flat_map(|(place, region)| {
                 let lent_place = PlaceRef::from(*place).to_place(tcx);
                 let mut mutant_body = body.clone();

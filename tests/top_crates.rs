@@ -3,6 +3,11 @@ use serde_derive::{Deserialize, Serialize};
 mod common;
 use common::{get, run_on_crate};
 
+use std::fs::File;
+use std::io::Write;
+
+use std::path::Path;
+
 #[test]
 pub fn top_crates() {
     for i in 0..50 {
@@ -10,31 +15,45 @@ pub fn top_crates() {
     }
 }
 
+#[derive(Serialize)]
+struct TopCratesResult {
+    succeeded: Vec<String>,
+    failed: Vec<String>,
+}
+
 pub fn top_crates_range(range: std::ops::Range<usize>) {
+    let mut stats = TopCratesResult { succeeded: vec![], failed: vec![] };
     if let Ok(str) = std::env::var("RESULTS_DIR") {
         std::fs::create_dir_all("tmp").unwrap();
         let top_crates = CratesIter::top(range);
         let handles: Vec<_> = top_crates
             .map(|(i, krate)| {
+                let results_dir = str.to_string();
                 let version = krate.version.unwrap_or(krate.newest_version);
                 println!("Starting: {i} ({})", krate.name);
-                let results_dir = str.to_string();
                 (krate.name.clone(),
                  std::thread::spawn(move || {
                      std::env::set_var("RESULTS_DIR", results_dir);
                      run_on_crate(&krate.name, &version);
                  }))
             }).collect();
-        let mut failed = vec![];
-        let mut succeeded = vec![];
         for (name, handle) in handles {
             match handle.join() {
-                Err(_) => failed.push(name),
-                _ => succeeded.push(name)
+                Err(_) => stats.failed.push(name),
+                _ => stats.succeeded.push(name)
             }
         }
-        println!("Failed on crates {:?}", failed);
-        println!("Succeeded on crates {:?}", succeeded);
+
+        let path = {
+            let results_dir = str.to_string();
+            Path::new(&results_dir).join("top-crates-results.txt")
+        };
+        let mut output_file = File::create(&path).unwrap();
+
+        let stats_string = serde_json::to_string_pretty(&stats).unwrap();
+        output_file
+            .write_all(stats_string.as_bytes())
+            .expect("Failed to write results to file");
     }
 }
 

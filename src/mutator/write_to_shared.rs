@@ -1,6 +1,7 @@
 use super::utils::bogus_source_info;
 use super::utils::borrowed_places;
 use super::utils::is_shared;
+use super::utils::has_named_local;
 
 use std::collections::HashSet;
 
@@ -42,6 +43,7 @@ impl PeepholeMutator for WriteToShared {
 
         shared_in_next
             .filter(|(place, _)| shared_in_curr.contains(place))
+            .filter(|(place, _)| has_named_local(*place, body))
             .flat_map(|(place, _)| {
                 let shared_place = PlaceRef::from(*place).to_place(tcx);
                 let mut mutant_body = body.clone();

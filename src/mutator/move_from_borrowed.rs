@@ -2,6 +2,7 @@ use super::utils::borrowed_places;
 use super::utils::filter_borrowed_places_by_capability;
 use super::utils::filter_owned_places_by_capability;
 use super::utils::fresh_local;
+use super::utils::has_named_local;
 use super::utils::is_mut;
 
 use std::collections::HashSet;
@@ -55,6 +56,7 @@ impl PeepholeMutator for MoveFromBorrowed {
         lent_in_curr
             .iter()
             .filter(|place| lent_in_next.contains(place))
+            .filter(|place| has_named_local(**place, body))
             .flat_map(|place| {
                 let mut mutant_body = body.clone();
                 let lent_place = PlaceRef::from(**place).to_place(tcx);
