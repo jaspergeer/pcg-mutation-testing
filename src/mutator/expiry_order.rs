@@ -160,13 +160,13 @@ impl PeepholeMutator for BorrowExpiryOrder {
                         .iter()
                         .any(|kind| match kind {
                             BorrowPCGEdgeKind::Borrow(borrow_edge) =>
-                                borrow_edge.kind().iter().all(|kind| is_mut(*kind)),
+                                borrow_edge.kind().iter().any(|kind| is_mut(*kind)),
                             _ => false,
                         })
                     },
                     |kind| match kind {
                         BorrowPCGEdgeKind::Borrow(borrow_edge) =>
-                            borrow_edge.kind().iter().all(|kind| is_mut(*kind)),
+                            borrow_edge.kind().iter().any(|kind| is_mut(*kind)),
                         _ => true,
                     },
                 );
@@ -301,13 +301,13 @@ impl PeepholeMutator for AbstractExpiryOrder {
                             .iter()
                             .any(|kind| match kind {
                                 BorrowPCGEdgeKind::Borrow(borrow_edge) =>
-                                    borrow_edge.kind().iter().all(|kind| is_mut(*kind)),
+                                    borrow_edge.kind().iter().any(|kind| is_mut(*kind)),
                                 _ => false,
                             })
                     },
                     |kind| match kind {
                         BorrowPCGEdgeKind::Borrow(borrow_edge) =>
-                            borrow_edge.kind().iter().all(|kind| is_mut(*kind)),
+                            borrow_edge.kind().iter().any(|kind| is_mut(*kind)),
                         _ => true,
                     },
                 );

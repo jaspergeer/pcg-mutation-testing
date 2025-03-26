@@ -418,14 +418,15 @@ fn main() {
     // NOTE: MutablyLendReadOnly and WriteToReadOnly are no longer valid
     let mut callbacks = MutatorCallbacks {
         mutators: vec![
-            // Box::new(BorrowExpiryOrder),
-            // Box::new(AbstractExpiryOrder),
-            // Box::new(MutablyLendShared),
-            // Box::new(ReadFromWriteOnly),
-            // Box::new(WriteToShared),
-            // Box::new(MoveFromBorrowed),
-            // Box::new(ShallowExclusiveRead),
-            // Box::new(BlockMutableBorrow),
+            Box::new(BorrowExpiryOrder),
+            Box::new(AbstractExpiryOrder),
+            Box::new(MutablyLendShared),
+            Box::new(ReadFromWriteOnly),
+            Box::new(WriteToShared),
+            Box::new(MoveFromBorrowed),
+            // vvv Not included in paper
+            Box::new(BlockMutableBorrow),
+            Box::new(ShallowExclusiveRead),
         ],
         results_dir: results_dir,
     };

@@ -41,8 +41,27 @@ impl PeepholeMutator for WriteToShared {
             borrowed_places(borrows_graph, is_shared)
         };
 
+        // let mut initialized_places = {
+        //     let repacker = PlaceRepacker::new(body, tcx);
+        //     let mut owned_init: HashSet<_> = {
+        //         let owned_capabilities = next.states.post_operands();
+        //         filter_owned_places_by_capability(&owned_capabilities, repacker, |ck| {
+        //             !ck.iter().any(|c| c.is_write())
+        //         })
+        //     };
+        //     let mut borrowed_init = {
+        //         let borrows_state = next.borrows.post_operands();
+        //         filter_borrowed_places_by_capability(&borrows_state, repacker, |ck| {
+        //             !ck.iter().any(|c| c.is_write())
+        //         })
+        //     };
+        //     owned_init.extend(borrowed_init.drain());
+        //     owned_init
+        // };
+
         shared_in_next
             .filter(|(place, _)| shared_in_curr.contains(place))
+            // .filter(|(place, _)| initialized_places.contains(place))
             .filter(|(place, _)| has_named_local(*place, body))
             .flat_map(|(place, _)| {
                 let shared_place = PlaceRef::from(*place).to_place(tcx);

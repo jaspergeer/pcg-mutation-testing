@@ -53,9 +53,28 @@ impl PeepholeMutator for MoveFromBorrowed {
                 .collect::<HashSet<_>>()
         };
 
+        // let mut initialized_places = {
+        //     let repacker = PlaceRepacker::new(body, tcx);
+        //     let mut owned_init: HashSet<_> = {
+        //         let owned_capabilities = next.states.post_operands();
+        //         filter_owned_places_by_capability(&owned_capabilities, repacker, |ck| {
+        //             !ck.iter().any(|c| c.is_write())
+        //         })
+        //     };
+        //     let mut borrowed_init = {
+        //         let borrows_state = next.borrows.post_operands();
+        //         filter_borrowed_places_by_capability(&borrows_state, repacker, |ck| {
+        //             !ck.iter().any(|c| c.is_write())
+        //         })
+        //     };
+        //     owned_init.extend(borrowed_init.drain());
+        //     owned_init
+        // };
+
         lent_in_curr
             .iter()
             .filter(|place| lent_in_next.contains(place))
+            // .filter(|place| initialized_places.contains(place))
             .filter(|place| has_named_local(**place, body))
             .flat_map(|place| {
                 let mut mutant_body = body.clone();

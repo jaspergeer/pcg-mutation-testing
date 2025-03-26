@@ -47,8 +47,27 @@ impl PeepholeMutator for MutablyLendShared {
                 .collect::<HashSet<_>>()
         };
 
+        // let mut initialized_places = {
+        //     let repacker = PlaceRepacker::new(body, tcx);
+        //     let mut owned_init: HashSet<_> = {
+        //         let owned_capabilities = next.states.post_operands();
+        //         filter_owned_places_by_capability(&owned_capabilities, repacker, |ck| {
+        //             !ck.iter().any(|c| c.is_write())
+        //         })
+        //     };
+        //     let mut borrowed_init = {
+        //         let borrows_state = next.borrows.post_operands();
+        //         filter_borrowed_places_by_capability(&borrows_state, repacker, |ck| {
+        //             !ck.iter().any(|c| c.is_write())
+        //         })
+        //     };
+        //     owned_init.extend(borrowed_init.drain());
+        //     owned_init
+        // };
+
         immutably_lent_in_curr
             .filter(|(place, _)| immutably_lent_in_next.contains(place))
+            // .filter(|(place, _)| initialized_places.contains(place))
             .filter(|(place, _)| has_named_local(*place, body))
             .flat_map(|(place, region)| {
                 let lent_place = PlaceRef::from(*place).to_place(tcx);
