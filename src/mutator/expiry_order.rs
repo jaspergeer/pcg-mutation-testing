@@ -55,85 +55,6 @@ use pcs::borrow_pcg::edge_data::EdgeData;
 use pcs::borrow_pcg::graph::BorrowsGraph;
 use pcs::borrow_pcg::region_projection::RegionProjection;
 
-// fn order_by_expiry<'tcx, 'mir>(
-//     borrows_graph: &BorrowsGraph<'tcx>,
-//     repacker: PlaceRepacker<'mir, 'tcx>,
-//     loc: &PcgLocation<'tcx>,
-// ) -> Vec<Place<'tcx>> {
-//     let mut ordered_places: Vec<Place<'tcx>> = vec![];
-
-//     let mut to_visit: Vec<PCGNode<'tcx>> = borrows_graph
-//         .frozen_graph()
-//         .leaf_nodes(repacker)
-//         .map(BlockedNode::from)
-//         .collect();
-
-//     let mut blocking_map: HashMap<PCGNode<'tcx>, usize> = HashMap::new();
-//     for edge in borrows_graph.edges() {
-//         for node in edge.blocked_nodes(repacker) {
-//             let count = blocking_map.entry(node).or_insert(0);
-//             let num_nodes_blocking = edge.blocked_by_nodes(repacker).len();
-//             *count += num_nodes_blocking;
-//         }
-//     }
-
-//     let mut to_visit: Vec<PCGNode<'tcx>> = borrows_graph
-//         .nodes(repacker)
-//         .drain()
-//         .filter(|node| !blocking_map.contains_key(node))
-//         .collect();
-
-//     while let Some(curr) = to_visit.pop() {
-//         if let Some(place) = pcg_node_to_current_place(curr) {
-//             if has_named_local(place, repacker.body()) {
-//                 ordered_places.push(place);
-//             }
-//         }
-
-//         let maybe_local_node = curr.try_to_local_node(repacker);
-//         let blocked_edges = maybe_local_node.iter().flat_map(|local_node_ref| {
-//             let local_node = *local_node_ref;
-//             borrows_graph.edges_blocked_by(local_node, repacker)
-//         });
-
-//         for edge in blocked_edges {
-//             let mut blocked_nodes = edge.blocked_nodes(repacker);
-//             for node in blocked_nodes.drain() {
-//                 let count = blocking_map.get_mut(&node).unwrap();
-//                 *count -= 1;
-//                 if *count == 0 {
-//                     blocking_map.remove(&node);
-//                     to_visit.push(node);
-//                 }
-//             }
-//         }
-//     }
-//     assert!(blocking_map.is_empty());
-
-//     let write_only_in_loc = {
-//         let borrows_state = loc.borrows.post_operands();
-//         let mut owned_write = {
-//             let owned_capabilities = loc.states.post_operands();
-//             filter_owned_places_by_capability(&owned_capabilities, |ck| {
-//                 ck == CapabilityKind::Write
-//             })
-//         };
-//         let mut borrowed_write = {
-//             let borrow_capabilities = borrows_state.capabilities();
-//             filter_borrowed_places_by_capability(&borrow_capabilities, |ck| {
-//                 ck == CapabilityKind::Write
-//             })
-//         };
-//         owned_write.extend(borrowed_write.drain());
-//         owned_write
-//     };
-
-//     ordered_places.drain(..)
-//                   .filter(|place| !write_only_in_loc.contains(place))
-//                   .collect()
-// }
-
-
 fn places_blocking<'mir, 'tcx>(
     place: Place<'tcx>,
     borrows_graph: &BorrowsGraph<'tcx>,
@@ -141,6 +62,8 @@ fn places_blocking<'mir, 'tcx>(
     is_blocking_edge: impl Fn(&HashSet<BorrowPCGEdgeKind>) -> bool,
     is_valid_edge: impl Fn(&BorrowPCGEdgeKind) -> bool,
 ) -> HashSet<Place<'tcx>> {
+    // println!();
+    // println!("PLACES BLOCKING {:?}", &place);
     let node = place.into();
     let mut to_visit: Vec<(BorrowPCGEdgeRef<'_, '_>,
                            HashSet<BorrowPCGEdgeKind<'_>>)> =
@@ -154,6 +77,7 @@ fn places_blocking<'mir, 'tcx>(
     let mut places: HashSet<Place<'tcx>> = HashSet::new();
 
     while let Some((curr, mut kind_set)) = to_visit.pop() {
+        // println!("VISIT {:?}", &curr);
         kind_set.insert(curr.kind().clone());
         if is_blocking_edge(&kind_set) {
             let mut nodes: Vec<_> = curr
@@ -164,6 +88,7 @@ fn places_blocking<'mir, 'tcx>(
             places.extend(nodes.drain(..));
         }
         let mut incident_nodes = curr.blocked_by_nodes(repacker);
+        // println!("ADJACENT NODES {:?}", &incident_nodes);
         let mut adjacent_edges = incident_nodes
             .drain()
             .map(BlockedNode::from)
@@ -174,9 +99,9 @@ fn places_blocking<'mir, 'tcx>(
             })
             .filter(|edge| is_valid_edge(edge.kind()))
             .map(|edge| (edge, kind_set.clone()));
-
         to_visit.extend(adjacent_edges);
     }
+    // println!("blocking_places for {:?}: {:?}", &place, &places);
     places
 }
 
@@ -216,26 +141,14 @@ impl PeepholeMutator for BorrowExpiryOrder {
 
         let mut mutant_sequences: Vec<(Vec<Statement<'tcx>>, Body<'tcx>)> = vec![];
 
-        let mut initialized_places = {
-            let mut owned_init: HashSet<_> = {
-                let owned_capabilities = next.states.post_operands();
-                filter_owned_places_by_capability(&owned_capabilities, repacker, |ck| {
-                    !ck.iter().any(|c| c.is_write())
-                })
-            };
-            let mut borrowed_init = {
-                let borrows_state = next.borrows.post_operands();
-                filter_borrowed_places_by_capability(&borrows_state, repacker, |ck| {
-                    !ck.iter().any(|c| c.is_write())
-                })
-            };
-            owned_init.extend(borrowed_init.drain());
-            owned_init
-        };
-
         let borrows_graph = next.borrows.post_operands().graph();
 
-        for place_ref in initialized_places.iter() {
+        let mutably_borrowed_places: HashSet<Place<'tcx>> =
+            borrowed_places(&borrows_graph, is_mut)
+            .map(|(place, _)| (*place).into())
+            .collect();
+
+        for place_ref in mutably_borrowed_places.iter() {
             let place = *place_ref;
             if has_named_local(place, body) {
                 let mut blocking_places = places_blocking(
@@ -252,13 +165,13 @@ impl PeepholeMutator for BorrowExpiryOrder {
                         })
                     },
                     |kind| match kind {
-                        BorrowPCGEdgeKind::Abstraction(_) => false,
+                        BorrowPCGEdgeKind::Borrow(borrow_edge) =>
+                            borrow_edge.kind().iter().all(|kind| is_mut(*kind)),
                         _ => true,
                     },
                 );
                 for blocking_place in blocking_places.drain() {
-                    if has_named_local(blocking_place, body)
-                        && initialized_places.contains(&blocking_place) {
+                    if has_named_local(blocking_place, body) {
                         let mut mutant_body = body.clone();
                         let mut mutant_sequence = places_to_statements(
                             tcx,
@@ -313,7 +226,7 @@ impl PeepholeMutator for BorrowExpiryOrder {
 
                 let end_loc = MutantLocation {
                     basic_block: mutant_bb_index.into(),
-                    statement_index: mutant_bb.statements.len(),
+                    statement_index: curr.location.statement_index,
                 };
 
                 let bb = mutant_body
@@ -363,28 +276,14 @@ impl PeepholeMutator for AbstractExpiryOrder {
 
         let mut mutant_sequences: Vec<(Vec<Statement<'tcx>>, Body<'tcx>)> = vec![];
 
-        let mut initialized_places = {
-            let mut owned_init: HashSet<_> = {
-                let owned_capabilities = next.states.post_operands();
-                filter_owned_places_by_capability(&owned_capabilities, repacker, |ck| {
-                    // true
-                    !ck.iter().any(|c| c.is_write())
-                })
-            };
-            let mut borrowed_init = {
-                let borrows_state = next.borrows.post_operands();
-                filter_borrowed_places_by_capability(&borrows_state, repacker, |ck| {
-                    // true
-                    !ck.iter().any(|c| c.is_write())
-                })
-            };
-            owned_init.extend(borrowed_init.drain());
-            owned_init
-        };
-
         let borrows_graph = next.borrows.post_operands().graph();
 
-        for place_ref in initialized_places.iter() {
+        let mutably_borrowed_places: HashSet<Place<'tcx>> =
+            borrowed_places(&borrows_graph, is_mut)
+            .map(|(place, _)| (*place).into())
+            .collect();
+
+        for place_ref in mutably_borrowed_places.iter() {
             let place = *place_ref;
             if has_named_local(place, body) {
                 let mut blocking_places = places_blocking(
@@ -406,11 +305,14 @@ impl PeepholeMutator for AbstractExpiryOrder {
                                 _ => false,
                             })
                     },
-                    |_| true,
+                    |kind| match kind {
+                        BorrowPCGEdgeKind::Borrow(borrow_edge) =>
+                            borrow_edge.kind().iter().all(|kind| is_mut(*kind)),
+                        _ => true,
+                    },
                 );
                 for blocking_place in blocking_places.drain() {
-                    if has_named_local(blocking_place, body)
-                        && initialized_places.contains(&blocking_place) {
+                    if has_named_local(blocking_place, body) {
                         let mut mutant_body = body.clone();
                         let mut mutant_sequence = places_to_statements(
                             tcx,

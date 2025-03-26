@@ -100,7 +100,6 @@ fn mir_borrowck<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> ProvidedValue<'t
         let consumer_opts = consumers::ConsumerOptions::PoloniusInputFacts;
         consumers::get_body_with_borrowck_facts(tcx, def_id, consumer_opts)
     };
-    // eprintln!("{:?}", &body_with_facts.body);
     unsafe {
         let body: BodyWithBorrowckFacts<'tcx> = body_with_facts.into();
         let body: BodyWithBorrowckFacts<'static> = std::mem::transmute(body);
@@ -175,11 +174,8 @@ fn run_pcg_on_all_fns<'mir, 'tcx>(
                     );
                     item_names.push(item_name);
                 }
-            }
-
-            unsupported_item_kind => {
-                // eprintln!("Unsupported item: {unsupported_item_kind:?}");
-            }
+            },
+            _ => {},
         }
     }
     if let Some(dir_path) = &vis_dir {
@@ -196,6 +192,10 @@ fn run_pcg_on_all_fns<'mir, 'tcx>(
         file.write_all(json_data.as_bytes())
             .expect("Failed to write item names to JSON file");
     }
+}
+
+fn cargo_crate_name() -> Option<String> {
+    std::env::var("CARGO_CRATE_NAME").ok()
 }
 
 // TODO interleave pcg generation and mutation testing
@@ -238,7 +238,6 @@ fn run_mutation_tests<'tcx>(
             let (numerator, denominator) = mutator.run_ratio();
             let mutants = mutator.generate_mutants(tcx, &mut analysis, &body);
 
-            // eprintln!("running mutator for {:?}", &def_id);
             for Mutant { body, range, info } in mutants {
                 mutator_data.instances += 1;
                 let do_borrowck = env_feature_enabled("DO_BORROWCK").unwrap_or(true);
@@ -247,12 +246,7 @@ fn run_mutation_tests<'tcx>(
                     let borrow_check_info = if rand::random_ratio(numerator, denominator)
                         && do_borrowck
                     {
-                        // eprintln!(
-                        //     "mutant at {} in {:?}",
-                        //     serde_json::to_value(&range).unwrap(),
-                        //     def_id
-                        // );
-                        // track_body_error_codes(def_id);
+                        track_body_error_codes(def_id);
 
                         let (borrowck_result, mutant_body_with_borrowck_facts) = {
                             let consumer_opts = consumers::ConsumerOptions::PoloniusInputFacts;
@@ -272,8 +266,10 @@ fn run_mutation_tests<'tcx>(
                             }
                         } else {
                             mutator_data.passed += 1;
-                            passed_bodies
-                                .insert(def_id, (*mutant_body_with_borrowck_facts.unwrap()).into());
+                            if env_feature_enabled("PCG_VISUALIZATION").unwrap_or(false) {
+                                passed_bodies
+                                    .insert(def_id, (*mutant_body_with_borrowck_facts.unwrap()).into());
+                            }
                             BorrowCheckInfo::Passed
                         }
                     } else {
@@ -286,7 +282,9 @@ fn run_mutation_tests<'tcx>(
                         range: range,
                         info: info,
                     };
-                    // mutants_log.insert(mutants_log.len().to_string(), log_entry);
+                    if env_feature_enabled("MUTANTS_LOG").unwrap_or(false) {
+                        mutants_log.insert(mutants_log.len().to_string(), log_entry);
+                    }
                     compiler.sess.dcx().reset_err_count(); // cursed
                 }));
 
@@ -308,48 +306,51 @@ fn run_mutation_tests<'tcx>(
 
     for def_id in tcx.hir().body_owners() {
         let kind = tcx.def_kind(def_id);
-        match kind {
-            hir::def::DefKind::Fn | hir::def::DefKind::AssocFn => {
-                let body_with_borrowck_facts = body_map.get(&def_id).unwrap();
+        let item_name = tcx.def_path_str(def_id.to_def_id()).to_string();
+        if !item_name.contains("de::deserialize_map") {
+            match kind {
+                hir::def::DefKind::Fn | hir::def::DefKind::AssocFn => {
+                    let body_with_borrowck_facts = body_map.get(&def_id).unwrap();
 
-                let safety = tcx.fn_sig(def_id).skip_binder().safety();
-                if safety == hir::Safety::Unsafe {
-                    continue;
+                    let safety = tcx.fn_sig(def_id).skip_binder().safety();
+                    if safety == hir::Safety::Unsafe {
+                        continue;
+                    }
+                    std::env::set_var("PCG_VALIDITY_CHECKS", "false");
+                    let analysis = run_combined_pcs(body_with_borrowck_facts, tcx, None);
+
+                    run_mutation_tests_for_body(
+                        tcx,
+                        compiler,
+                        mutators,
+                        &mut mutants_log,
+                        &mut mutator_results,
+                        &mut passed_bodies,
+                        def_id,
+                        body_with_borrowck_facts,
+                        analysis,
+                    );
                 }
-                std::env::set_var("PCG_VALIDITY_CHECKS", "false");
-                let analysis = run_combined_pcs(body_with_borrowck_facts, tcx, None);
-
-                run_mutation_tests_for_body(
-                    tcx,
-                    compiler,
-                    mutators,
-                    &mut mutants_log,
-                    &mut mutator_results,
-                    &mut passed_bodies,
-                    def_id,
-                    body_with_borrowck_facts,
-                    analysis,
-                );
-            }
-            unsupported_item_kind => {
-                // eprintln!("Unsupported item: {unsupported_item_kind:?}");
+                _ => {},
             }
         }
     }
 
-    // run_pcg_on_all_fns(&passed_bodies, tcx);
+    if env_feature_enabled("PCG_VISUALIZATION").unwrap_or(false) {
+        run_pcg_on_all_fns(&passed_bodies, tcx);
+    }
 
-    let crate_name = tcx.crate_name(CrateNum::from_usize(0)).to_string();
+    let crate_name = cargo_crate_name().unwrap_or("crate".to_string());
 
-    // let mutants_log_path = results_dir
-    //     .join(crate_name.clone() + "-mutants")
-    //     .with_extension("json");
-    // let mut mutants_log_file =
-    //     File::create(&mutants_log_path).expect("Failed to create output file");
-    // let mutants_log_string = serde_json::to_string_pretty(&mutants_log).unwrap();
-    // mutants_log_file
-    //     .write_all(mutants_log_string.as_bytes())
-    //     .expect("Failed to write results to file");
+    let mutants_log_path = results_dir
+        .join(crate_name.clone() + "-mutants")
+        .with_extension("json");
+    let mut mutants_log_file =
+        File::create(&mutants_log_path).expect("Failed to create output file");
+    let mutants_log_string = serde_json::to_string_pretty(&mutants_log).unwrap();
+    mutants_log_file
+        .write_all(mutants_log_string.as_bytes())
+        .expect("Failed to write results to file");
 
     let mutator_results_path = results_dir.join(crate_name).with_extension("json");
     let mut mutator_results_file =
@@ -390,6 +391,7 @@ impl Callbacks for MutatorCallbacks {
 }
 
 fn in_cargo_crate() -> bool {
+    // true
     std::env::var("CARGO_CRATE_NAME").is_ok()
 }
 
@@ -413,19 +415,17 @@ fn main() {
         _ => std::env::current_dir().unwrap(),
     };
 
+    // NOTE: MutablyLendReadOnly and WriteToReadOnly are no longer valid
     let mut callbacks = MutatorCallbacks {
         mutators: vec![
-            Box::new(BorrowExpiryOrder),
-            Box::new(AbstractExpiryOrder),
-            Box::new(MutablyLendShared),
-            Box::new(ReadFromWriteOnly),
-            Box::new(WriteToReadOnly),
-            Box::new(WriteToShared),
-            Box::new(MoveFromBorrowed),
-            Box::new(MutablyLendReadOnly),
+            // Box::new(BorrowExpiryOrder),
+            // Box::new(AbstractExpiryOrder),
+            // Box::new(MutablyLendShared),
+            // Box::new(ReadFromWriteOnly),
+            // Box::new(WriteToShared),
+            // Box::new(MoveFromBorrowed),
             // Box::new(ShallowExclusiveRead),
-            Box::new(BlockMutableBorrow),
-            // Box::new(DropBorrowed),
+            // Box::new(BlockMutableBorrow),
         ],
         results_dir: results_dir,
     };

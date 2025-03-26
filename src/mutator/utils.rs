@@ -35,6 +35,7 @@ use crate::rustc_interface::middle::mir::BasicBlockData;
 use crate::rustc_interface::middle::mir::BindingForm;
 use crate::rustc_interface::middle::mir::Body;
 use crate::rustc_interface::middle::mir::BorrowKind;
+use crate::rustc_interface::middle::mir::MutBorrowKind;
 use crate::rustc_interface::middle::mir::ClearCrossCrate;
 use crate::rustc_interface::middle::mir::Local;
 use crate::rustc_interface::middle::mir::LocalDecl;
@@ -163,7 +164,7 @@ pub(crate) fn bogus_source_info<'tcx>(body: &Body<'tcx>) -> SourceInfo {
 
 pub(crate) fn is_mut(kind: BorrowKind) -> bool {
     match kind {
-        BorrowKind::Mut { .. } => true,
+        BorrowKind::Mut { kind: MutBorrowKind::Default } => true,
         _ => false,
     }
 }

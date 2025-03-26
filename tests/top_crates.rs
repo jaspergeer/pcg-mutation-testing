@@ -24,7 +24,7 @@ struct TopCratesResult {
     failed: Vec<String>,
 }
 
-const MAX_CONCURRENT_THREADS: usize = 10;
+const MAX_CONCURRENT_THREADS: usize = 20;
 
 pub fn top_crates_range(range: Range<usize>, date: &str) {
     let mut stats = TopCratesResult { succeeded: vec![], failed: vec![] };

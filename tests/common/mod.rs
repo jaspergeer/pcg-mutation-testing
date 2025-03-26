@@ -90,7 +90,7 @@ pub fn is_polonius_test_file(file: &Path) -> bool {
 #[allow(dead_code)]
 pub fn run_pcg_on_file(file: &Path) {
     let workspace_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
-    let pcs_exe = workspace_dir.join("target/debug/pcs_bin");
+    let pcs_exe = workspace_dir.join("target/debug/pcg-evaluation-bin");
     println!("Running PCG on file: {}", file.display());
 
     let status = Command::new(&pcs_exe)
