@@ -340,26 +340,27 @@ fn run_mutation_tests<'tcx>(
         run_pcg_on_all_fns(&passed_bodies, tcx);
     }
 
-    let crate_name = cargo_crate_name().unwrap_or("crate".to_string());
+    if let Some(crate_name) = cargo_crate_name() {
+        let mutants_log_path = results_dir
+            .join(crate_name.clone() + "-mutants")
+            .with_extension("json");
+        let mut mutants_log_file =
+            File::create(&mutants_log_path).expect("Failed to create output file");
+        let mutants_log_string = serde_json::to_string_pretty(&mutants_log).unwrap();
+        mutants_log_file
+            .write_all(mutants_log_string.as_bytes())
+            .expect("Failed to write results to file");
 
-    let mutants_log_path = results_dir
-        .join(crate_name.clone() + "-mutants")
-        .with_extension("json");
-    let mut mutants_log_file =
-        File::create(&mutants_log_path).expect("Failed to create output file");
-    let mutants_log_string = serde_json::to_string_pretty(&mutants_log).unwrap();
-    mutants_log_file
-        .write_all(mutants_log_string.as_bytes())
-        .expect("Failed to write results to file");
-
-    let mutator_results_path = results_dir.join(crate_name).with_extension("json");
-    let mut mutator_results_file =
-        File::create(&mutator_results_path).expect("Failed to create output file");
-    let mutator_results_string = serde_json::to_string_pretty(&mutator_results).unwrap();
-    mutator_results_file
-        .write_all(mutator_results_string.as_bytes())
-        .expect("Failed to write results to file");
+        let mutator_results_path = results_dir.join(crate_name).with_extension("json");
+        let mut mutator_results_file =
+            File::create(&mutator_results_path).expect("Failed to create output file");
+        let mutator_results_string = serde_json::to_string_pretty(&mutator_results).unwrap();
+        mutator_results_file
+            .write_all(mutator_results_string.as_bytes())
+            .expect("Failed to write results to file");
+    }
 }
+
 
 impl Callbacks for MutatorCallbacks {
     fn config(&mut self, config: &mut Config) {
@@ -425,8 +426,8 @@ fn main() {
             Box::new(WriteToShared),
             Box::new(MoveFromBorrowed),
             // vvv Not included in paper
-            Box::new(BlockMutableBorrow),
-            Box::new(ShallowExclusiveRead),
+            // Box::new(BlockMutableBorrow),
+            // Box::new(ShallowExclusiveRead),
         ],
         results_dir: results_dir,
     };
