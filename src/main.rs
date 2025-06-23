@@ -344,12 +344,16 @@ fn run_mutation_tests<'tcx>(
     if let Some(crate_name) = cargo_crate_name() {
         let mut crate_name_suffix = 0;
         let mut mutants_log_path;
+        let mut mutator_results_path;
 
         while {
-            let filename = crate_name.clone() + &crate_name_suffix.to_string();
+            let unique_crate_name = crate_name.clone() + &crate_name_suffix.to_string();
             crate_name_suffix += 1;
             mutants_log_path = results_dir
-                .join(filename + "-mutants")
+                .join(unique_crate_name.clone() + "-mutants")
+                .with_extension("json");
+            mutator_results_path = results_dir
+                .join(unique_crate_name)
                 .with_extension("json");
             !Path::exists(&*mutants_log_path)
         } {}
@@ -361,7 +365,6 @@ fn run_mutation_tests<'tcx>(
             .write_all(mutants_log_string.as_bytes())
             .expect("Failed to write results to file");
 
-        let mutator_results_path = results_dir.join(crate_name).with_extension("json");
         let mut mutator_results_file =
             File::create(&mutator_results_path).expect("Failed to create output file");
         let mutator_results_string = serde_json::to_string_pretty(&mutator_results).unwrap();
