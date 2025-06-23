@@ -23,6 +23,7 @@ use pcg_evaluation::utils::env_feature_enabled;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
+use std::path::Path;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -341,9 +342,18 @@ fn run_mutation_tests<'tcx>(
     }
 
     if let Some(crate_name) = cargo_crate_name() {
-        let mutants_log_path = results_dir
-            .join(crate_name.clone() + "-mutants")
-            .with_extension("json");
+        let mut crate_name_suffix = 0;
+        let mut mutants_log_path;
+
+        while {
+            let filename = crate_name.clone() + &crate_name_suffix.to_string();
+            crate_name_suffix += 1;
+            mutants_log_path = results_dir
+                .join(filename + "-mutants")
+                .with_extension("json");
+            !Path::exists(&*mutants_log_path)
+        } {}
+
         let mut mutants_log_file =
             File::create(&mutants_log_path).expect("Failed to create output file");
         let mutants_log_string = serde_json::to_string_pretty(&mutants_log).unwrap();
