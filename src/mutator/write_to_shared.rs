@@ -15,56 +15,37 @@ use crate::rustc_interface::middle::mir::PlaceRef;
 use crate::rustc_interface::middle::mir::Rvalue;
 use crate::rustc_interface::middle::mir::Statement;
 use crate::rustc_interface::middle::mir::StatementKind;
-use crate::rustc_interface::middle::ty::TyCtxt;
 
-use pcs::free_pcs::CapabilityKind;
-use pcs::free_pcs::PcgLocation;
+use pcg::free_pcs::PcgLocation;
+use pcg::pcg::EvalStmtPhase;
+use pcg::utils::CompilerCtxt;
 
 pub struct WriteToShared;
 
 impl PeepholeMutator for WriteToShared {
-    fn generate_mutants<'tcx>(
-        tcx: TyCtxt<'tcx>,
+    fn generate_mutants<'mir, 'tcx>(
+        ctx: CompilerCtxt<'mir, 'tcx>,
         body: &Body<'tcx>,
         curr: &PcgLocation<'tcx>,
         next: &PcgLocation<'tcx>,
     ) -> Vec<Mutant<'tcx>> {
         let shared_in_curr = {
-            let borrows_graph = curr.borrows.post_main().graph();
+            let borrows_graph = curr.states[EvalStmtPhase::PostMain].borrow_pcg().graph();
             borrowed_places(borrows_graph, is_shared)
                 .map(|(place, _)| place)
                 .collect::<HashSet<_>>()
         };
 
         let shared_in_next = {
-            let borrows_graph = next.borrows.post_operands().graph();
+            let borrows_graph = curr.states[EvalStmtPhase::PostOperands].borrow_pcg().graph();
             borrowed_places(borrows_graph, is_shared)
         };
 
-        // let mut initialized_places = {
-        //     let repacker = PlaceRepacker::new(body, tcx);
-        //     let mut owned_init: HashSet<_> = {
-        //         let owned_capabilities = next.states.post_operands();
-        //         filter_owned_places_by_capability(&owned_capabilities, repacker, |ck| {
-        //             !ck.iter().any(|c| c.is_write())
-        //         })
-        //     };
-        //     let mut borrowed_init = {
-        //         let borrows_state = next.borrows.post_operands();
-        //         filter_borrowed_places_by_capability(&borrows_state, repacker, |ck| {
-        //             !ck.iter().any(|c| c.is_write())
-        //         })
-        //     };
-        //     owned_init.extend(borrowed_init.drain());
-        //     owned_init
-        // };
-
         shared_in_next
             .filter(|(place, _)| shared_in_curr.contains(place))
-            // .filter(|(place, _)| initialized_places.contains(place))
             .filter(|(place, _)| has_named_local(*place, body))
             .flat_map(|(place, _)| {
-                let shared_place = PlaceRef::from(*place).to_place(tcx);
+                let shared_place = PlaceRef::from(*place).to_place(ctx.tcx());
                 let mut mutant_body = body.clone();
 
                 let statement_index = curr.location.statement_index;

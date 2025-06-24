@@ -1,9 +1,5 @@
 use super::utils::bogus_source_info;
-use super::utils::filter_borrowed_places_by_capability;
-use super::utils::filter_owned_places_by_capability;
 use super::utils::has_named_local;
-
-use std::collections::HashSet;
 
 use super::mutator_impl::Mutant;
 use super::mutator_impl::MutantLocation;
@@ -16,63 +12,48 @@ use crate::rustc_interface::middle::mir::Rvalue;
 use crate::rustc_interface::middle::mir::Statement;
 use crate::rustc_interface::middle::mir::StatementKind;
 
-use crate::rustc_interface::middle::ty::TyCtxt;
-
-use pcs::free_pcs::CapabilityKind;
-use pcs::free_pcs::PcgLocation;
-use pcs::utils::PlaceRepacker;
+use pcg::free_pcs::CapabilityKind;
+use pcg::free_pcs::PcgLocation;
+use pcg::pcg::EvalStmtPhase;
+use pcg::utils::CompilerCtxt;
 
 pub struct WriteToReadOnly;
 
 impl PeepholeMutator for WriteToReadOnly {
     fn generate_mutants<'mir, 'tcx>(
-        tcx: TyCtxt<'tcx>,
+        ctx: CompilerCtxt<'mir, 'tcx>,
         body: &Body<'tcx>,
         curr: &PcgLocation<'tcx>,
         next: &PcgLocation<'tcx>,
     ) -> Vec<Mutant<'tcx>> {
-        let read_only_in_curr = {
-            let repacker = PlaceRepacker::new(body, tcx);
-            let mut owned_write: HashSet<_> = {
-                let owned_capabilities = curr.states.post_main();
-                filter_owned_places_by_capability(&owned_capabilities, repacker, |ck| {
-                    ck == Some(CapabilityKind::Read)
-                })
-            };
-            let mut borrowed_write = {
-                let borrows_state = curr.borrows.post_main();
-                filter_borrowed_places_by_capability(&borrows_state, repacker, |ck| {
-                    ck == Some(CapabilityKind::Read)
-                })
-            };
-            owned_write.extend(borrowed_write.drain());
-            owned_write
-        };
+        let read_only_in_curr: Vec<_> =
+            curr.states[EvalStmtPhase::PostMain]
+            .capabilities()
+            .iter()
+            .filter_map(|(place, ck)|
+                        match ck {
+                            CapabilityKind::Read => Some(place),
+                            _ => None,
+                        })
+            .collect();
 
-        let read_only_in_next = {
-            let repacker = PlaceRepacker::new(body, tcx);
-            let mut owned_write = {
-                let owned_capabilities = next.states.post_operands();
-                filter_owned_places_by_capability(&owned_capabilities, repacker, |ck| {
-                    ck == Some(CapabilityKind::Read)
-                })
-            };
-            let mut borrowed_write = {
-                let borrows_state = next.borrows.post_operands();
-                filter_borrowed_places_by_capability(&borrows_state, repacker, |ck| {
-                    ck == Some(CapabilityKind::Read)
-                })
-            };
-            owned_write.extend(borrowed_write.drain());
-            owned_write
-        };
+        let read_only_in_next: Vec<_> =
+            next.states[EvalStmtPhase::PostOperands]
+            .capabilities()
+            .iter()
+            .filter_map(|(place, ck)|
+                        match ck {
+                            CapabilityKind::Read => Some(place),
+                            _ => None,
+                        })
+            .collect();
 
         read_only_in_curr
             .iter()
             .filter(|place| has_named_local(**place, body))
             .filter(|place| read_only_in_next.contains(place))
             .flat_map(|place| {
-                let read_only_place = PlaceRef::from(**place).to_place(tcx);
+                let read_only_place = PlaceRef::from(**place).to_place(ctx.tcx());
                 let mut mutant_body = body.clone();
 
                 let statement_index = curr.location.statement_index;

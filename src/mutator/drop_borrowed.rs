@@ -1,8 +1,5 @@
 use super::utils::borrowed_places;
 use super::utils::bogus_source_info;
-use super::utils::filter_borrowed_places_by_capability;
-use super::utils::filter_owned_places_by_capability;
-use super::utils::fresh_local;
 use super::utils::fresh_basic_block;
 
 use std::collections::HashSet;
@@ -13,44 +10,33 @@ use super::mutator_impl::MutantRange;
 use super::mutator_impl::PeepholeMutator;
 
 use crate::rustc_interface::middle::mir::Body;
-use crate::rustc_interface::middle::mir::BorrowKind;
-use crate::rustc_interface::middle::mir::FakeReadCause;
-use crate::rustc_interface::middle::mir::MutBorrowKind;
-use crate::rustc_interface::middle::mir::Operand;
-use crate::rustc_interface::middle::mir::Place as MirPlace;
 use crate::rustc_interface::middle::mir::PlaceRef;
-use crate::rustc_interface::middle::mir::Rvalue;
-use crate::rustc_interface::middle::mir::Statement;
-use crate::rustc_interface::middle::mir::StatementKind;
 use crate::rustc_interface::middle::mir::UnwindAction;
 use crate::rustc_interface::middle::mir::Terminator;
 use crate::rustc_interface::middle::mir::TerminatorKind;
-use crate::rustc_interface::middle::ty::Region;
-use crate::rustc_interface::middle::ty::RegionKind;
-use crate::rustc_interface::middle::ty::Ty;
-use crate::rustc_interface::middle::ty::TyCtxt;
 
-use pcs::free_pcs::CapabilityKind;
-use pcs::free_pcs::PcgLocation;
+use pcg::pcg::EvalStmtPhase;
+use pcg::free_pcs::PcgLocation;
+use pcg::utils::CompilerCtxt;
 
 pub struct DropBorrowed;
 
 impl PeepholeMutator for DropBorrowed {
-    fn generate_mutants<'tcx>(
-        tcx: TyCtxt<'tcx>,
+    fn generate_mutants<'mir, 'tcx>(
+        ctx: CompilerCtxt<'mir, 'tcx>,
         body: &Body<'tcx>,
         curr: &PcgLocation<'tcx>,
         next: &PcgLocation<'tcx>,
     ) -> Vec<Mutant<'tcx>> {
         let lent_in_curr = {
-            let borrows_graph = curr.borrows.post_main().graph();
+            let borrows_graph = curr.states[EvalStmtPhase::PostMain].borrow_pcg().graph();
             borrowed_places(borrows_graph, |_| true)
                 .map(|(place, _)| place)
                 .collect::<HashSet<_>>()
         };
 
         let lent_in_next = {
-            let borrows_graph = next.borrows.post_operands().graph();
+            let borrows_graph = curr.states[EvalStmtPhase::PostOperands].borrow_pcg().graph();
             borrowed_places(borrows_graph, |_| true)
                 .map(|(place, _)| place)
                 .collect::<HashSet<_>>()
@@ -81,7 +67,7 @@ impl PeepholeMutator for DropBorrowed {
                 tail_bb.statements.append(&mut tail_statements);
                 tail_bb.terminator = bb_terminator;
 
-                let lent_place = PlaceRef::from(**place).to_place(tcx);
+                let lent_place = PlaceRef::from(**place).to_place(ctx.tcx());
 
                 let bb = mutant_body
                     .basic_blocks_mut()

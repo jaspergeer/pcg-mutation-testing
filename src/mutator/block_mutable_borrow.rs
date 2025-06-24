@@ -15,7 +15,6 @@ use crate::rustc_interface::middle::mir::Body;
 use crate::rustc_interface::middle::mir::BorrowKind;
 use crate::rustc_interface::middle::mir::FakeReadCause;
 use crate::rustc_interface::middle::mir::MutBorrowKind;
-use crate::rustc_interface::middle::mir::Operand;
 use crate::rustc_interface::middle::mir::Place as MirPlace;
 use crate::rustc_interface::middle::mir::PlaceElem as MirPlaceElem;
 use crate::rustc_interface::middle::mir::PlaceRef;
@@ -23,27 +22,26 @@ use crate::rustc_interface::middle::mir::Rvalue;
 use crate::rustc_interface::middle::mir::Statement;
 use crate::rustc_interface::middle::mir::StatementKind;
 use crate::rustc_interface::middle::ty::Region;
-use crate::rustc_interface::middle::ty::RegionKind;
 use crate::rustc_interface::middle::ty::RegionVid;
 use crate::rustc_interface::middle::ty::Ty;
-use crate::rustc_interface::middle::ty::TyCtxt;
 
-use pcs::free_pcs::CapabilityKind;
-use pcs::free_pcs::PcgLocation;
+use pcg::free_pcs::PcgLocation;
 
-use pcs::utils::PlaceRepacker;
+use pcg::pcg::EvalStmtPhase;
+
+use pcg::utils::CompilerCtxt;
 
 pub struct BlockMutableBorrow;
 
 impl PeepholeMutator for BlockMutableBorrow {
-    fn generate_mutants<'tcx>(
-        tcx: TyCtxt<'tcx>,
+    fn generate_mutants<'mir, 'tcx>(
+        ctx: CompilerCtxt<'mir, 'tcx>,
         body: &Body<'tcx>,
         curr: &PcgLocation<'tcx>,
         next: &PcgLocation<'tcx>,
     ) -> Vec<Mutant<'tcx>> {
-        fn generate_mutant_with_borrow_kind<'tcx>(
-            tcx: TyCtxt<'tcx>,
+        fn generate_mutant_with_borrow_kind<'mir, 'tcx>(
+            ctx: CompilerCtxt<'mir, 'tcx>,
             body: &Body<'tcx>,
             curr: &PcgLocation<'tcx>,
             lent_place: MirPlace<'tcx>,
@@ -51,10 +49,10 @@ impl PeepholeMutator for BlockMutableBorrow {
             borrow_kind: BorrowKind,
         ) -> Option<Mutant<'tcx>> {
             let mut mutant_body = body.clone();
-            let region = Region::new_var(tcx, RegionVid::MAX);
+            let region = Region::new_var(ctx.tcx(), RegionVid::MAX);
             // let another_region = Region::new_var(tcx, RegionVid::MAX - 1);
 
-            let borrow_ty = Ty::new_mut_ref(tcx, region, lent_place.ty(&body.local_decls, tcx).ty);
+            let borrow_ty = Ty::new_mut_ref(ctx.tcx(), region, lent_place.ty(&body.local_decls, ctx.tcx()).ty);
 
             let local_a = fresh_local(&mut mutant_body, borrow_ty);
             let local_b = fresh_local(&mut mutant_body, borrow_ty);
@@ -98,7 +96,7 @@ impl PeepholeMutator for BlockMutableBorrow {
             };
 
             let deref_local_a =
-                tcx.mk_place_elem(MirPlace::from(local_a), MirPlaceElem::Deref);
+                ctx.tcx().mk_place_elem(MirPlace::from(local_a), MirPlaceElem::Deref);
 
             let reborrow = Statement {
                 source_info: bogus_source_info(&mutant_body),
@@ -154,14 +152,14 @@ impl PeepholeMutator for BlockMutableBorrow {
         }
 
         let mutably_lent_in_curr = {
-            let borrows_graph = curr.borrows.post_main().graph();
+            let borrows_graph = curr.states[EvalStmtPhase::PostMain].borrow_pcg().graph();
             borrowed_places(borrows_graph, is_mut)
                 .map(|(place, _)| place)
                 .collect::<HashSet<_>>()
         };
 
         let mutably_lent_in_next = {
-            let borrows_graph = next.borrows.post_operands().graph();
+            let borrows_graph = next.states[EvalStmtPhase::PostOperands].borrow_pcg().graph();
             borrowed_places(borrows_graph, is_mut)
         };
 
@@ -169,7 +167,7 @@ impl PeepholeMutator for BlockMutableBorrow {
             .filter(|(place, _)| has_named_local(*place, body))
             .filter(|(place, _)| !mutably_lent_in_curr.contains(place))
             .flat_map(|(place, region)| {
-                let lent_place = PlaceRef::from(*place).to_place(tcx);
+                let lent_place = PlaceRef::from(*place).to_place(ctx.tcx());
                 vec![
                     // TODO Doesn't produce borrow checker violations for some reason
                     // generate_mutant_with_borrow_kind(
@@ -181,7 +179,7 @@ impl PeepholeMutator for BlockMutableBorrow {
                     //     BorrowKind::Shared,
                     // ),
                     generate_mutant_with_borrow_kind(
-                        tcx,
+                        ctx,
                         body,
                         curr,
                         lent_place,

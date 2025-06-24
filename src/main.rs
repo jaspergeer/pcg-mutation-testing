@@ -20,11 +20,11 @@ use pcg_evaluation::mutator::drop_borrowed::DropBorrowed;
 
 use pcg_evaluation::utils::env_feature_enabled;
 
+use std::alloc::System;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 use std::path::Path;
-
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -65,9 +65,11 @@ use pcg_evaluation::rustc_interface::interface::Config;
 
 use pcg_evaluation::rustc_interface::ast::Crate;
 
-use pcs::combined_pcs::BodyWithBorrowckFacts;
-use pcs::run_combined_pcs;
-use pcs::FpcsOutput;
+use pcg::pcg::BodyWithBorrowckFacts;
+use pcg::borrow_checker::r#impl::BorrowCheckerImpl;
+use pcg::run_pcg;
+use pcg::utils::CompilerCtxt;
+use pcg::PcgOutput;
 
 thread_local! {
     pub static BODIES:
@@ -110,89 +112,13 @@ fn mir_borrowck<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> ProvidedValue<'t
         });
     }
     let mut providers = Providers::default();
-    pcs::rustc_interface::borrowck::provide(&mut providers);
+    pcg::rustc_interface::borrowck::provide(&mut providers);
     let original_mir_borrowck = providers.mir_borrowck;
     original_mir_borrowck(tcx, def_id)
 }
 
 fn set_mir_borrowck(_session: &Session, providers: &mut Providers) {
     providers.mir_borrowck = mir_borrowck;
-}
-
-fn run_pcg_on_all_fns<'mir, 'tcx>(
-    body_map: &'mir HashMap<LocalDefId, BodyWithBorrowckFacts<'tcx>>,
-    tcx: TyCtxt<'tcx>,
-) {
-    if std::env::var("CARGO_CRATE_NAME").is_ok() && std::env::var("CARGO_PRIMARY_PACKAGE").is_err()
-    {
-        // We're running in cargo, but the Rust file is a dependency (not part of the primary package)
-
-        // For now we don't check dependencies, so we abort
-
-        return;
-    }
-
-    let user_specified_vis_dir = std::env::var("PCG_VISUALIZATION_DATA_DIR");
-
-    let vis_dir: Option<&str> = if env_feature_enabled("PCG_VISUALIZATION").unwrap_or(false) {
-        Some(match user_specified_vis_dir.as_ref() {
-            Ok(dir) => dir,
-
-            Err(_) => "visualization/data",
-        })
-    } else {
-        None
-    };
-
-    if let Some(path) = &vis_dir {
-        if std::path::Path::new(path).exists() {
-            std::fs::remove_dir_all(path)
-                .expect("Failed to delete visualization directory contents");
-        }
-
-        std::fs::create_dir_all(path).expect("Failed to create visualization directory");
-    }
-
-    let mut item_names = vec![];
-    for def_id in tcx.hir().body_owners() {
-        let kind = tcx.def_kind(def_id);
-
-        match kind {
-            hir::def::DefKind::Fn | hir::def::DefKind::AssocFn => {
-                let item_name = format!("{}", tcx.def_path_str(def_id.to_def_id()));
-
-                if let Some(body) = body_map.get(&def_id) {
-                    let safety = tcx.fn_sig(def_id).skip_binder().safety();
-
-                    if safety == hir::Safety::Unsafe {
-                        continue;
-                    }
-
-                    let _ = run_combined_pcs(
-                        body,
-                        tcx,
-                        vis_dir.map(|dir| format!("{}/{}", dir, item_name)),
-                    );
-                    item_names.push(item_name);
-                }
-            },
-            _ => {},
-        }
-    }
-    if let Some(dir_path) = &vis_dir {
-        let file_path = format!("{}/functions.json", dir_path);
-
-        let json_data = serde_json::to_string(
-            &item_names
-                .iter()
-                .map(|name| (name.clone(), name.clone()))
-                .collect::<std::collections::HashMap<_, _>>(),
-        )
-        .expect("Failed to serialize item names to JSON");
-        let mut file = File::create(file_path).expect("Failed to create JSON file");
-        file.write_all(json_data.as_bytes())
-            .expect("Failed to write item names to JSON file");
-    }
 }
 
 fn cargo_crate_name() -> Option<String> {
@@ -213,15 +139,15 @@ fn run_mutation_tests<'tcx>(
     }
 
     fn run_mutation_tests_for_body<'mir, 'tcx>(
-        tcx: TyCtxt<'tcx>,
+        ctx: CompilerCtxt<'mir, 'tcx>,
         compiler: &Compiler,
         mutators: &mut Vec<Box<dyn Mutator + Send>>,
         mutants_log: &mut IndexMap<String, LogEntry>,
         mutator_results: &mut HashMap<String, MutatorData>,
         passed_bodies: &mut HashMap<LocalDefId, BodyWithBorrowckFacts<'tcx>>,
         def_id: LocalDefId,
-        body_with_borrowck_facts: &BodyWithBorrowckFacts<'tcx>,
-        mut analysis: FpcsOutput<'mir, 'tcx>,
+        body_with_borrowck_facts: &'mir BodyWithBorrowckFacts<'tcx>,
+        mut analysis: PcgOutput<'mir, 'tcx, System>,
     ) {
         for mutator in mutators.iter_mut() {
             let mutator_data = mutator_results
@@ -237,7 +163,7 @@ fn run_mutation_tests<'tcx>(
             let promoted = &body_with_borrowck_facts.promoted;
 
             let (numerator, denominator) = mutator.run_ratio();
-            let mutants = mutator.generate_mutants(tcx, &mut analysis, &body);
+            let mutants = mutator.generate_mutants(ctx, &mut analysis, &body);
 
             for Mutant { body, range, info } in mutants {
                 mutator_data.instances += 1;
@@ -251,7 +177,7 @@ fn run_mutation_tests<'tcx>(
 
                         let (borrowck_result, mutant_body_with_borrowck_facts) = {
                             let consumer_opts = consumers::ConsumerOptions::PoloniusInputFacts;
-                            borrowck::do_mir_borrowck(tcx, &body, &promoted, Some(consumer_opts))
+                            borrowck::do_mir_borrowck(ctx.tcx(), &body, &promoted, Some(consumer_opts))
                         };
                         if let Some(_) = borrowck_result.tainted_by_errors {
                             mutator_data.failed += 1;
@@ -318,10 +244,13 @@ fn run_mutation_tests<'tcx>(
                         continue;
                     }
                     std::env::set_var("PCG_VALIDITY_CHECKS", "false");
-                    let analysis = run_combined_pcs(body_with_borrowck_facts, tcx, None);
+
+                    let borrow_checker_impl = BorrowCheckerImpl::new(tcx, body_with_borrowck_facts);
+                    let ctx: CompilerCtxt<'_, '_> = CompilerCtxt::new(&body_with_borrowck_facts.body, tcx, &borrow_checker_impl);
+                    let analysis = run_pcg(&body_with_borrowck_facts.body, ctx.tcx(), ctx.bc(), System, None);
 
                     run_mutation_tests_for_body(
-                        tcx,
+                        ctx,
                         compiler,
                         mutators,
                         &mut mutants_log,
@@ -338,7 +267,7 @@ fn run_mutation_tests<'tcx>(
     }
 
     if env_feature_enabled("PCG_VISUALIZATION").unwrap_or(false) {
-        run_pcg_on_all_fns(&passed_bodies, tcx);
+        // run_pcg_on_all_fns(&passed_bodies, tcx);
     }
 
     if let Some(crate_name) = cargo_crate_name() {

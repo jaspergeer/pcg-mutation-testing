@@ -1,15 +1,11 @@
 use super::utils::bogus_source_info;
 use super::utils::borrowed_places;
-use super::utils::filter_borrowed_places_by_capability;
-use super::utils::filter_owned_places_by_capability;
 use super::utils::fresh_basic_block;
 use super::utils::fresh_local;
 use super::utils::is_mut;
 use super::utils::has_named_local;
-use super::utils::pcg_node_to_current_place;
 use super::utils::local_node_to_current_place;
 
-use std::collections::HashMap;
 use std::collections::HashSet;
 
 use super::mutator_impl::Mutant;
@@ -17,11 +13,8 @@ use super::mutator_impl::MutantLocation;
 use super::mutator_impl::MutantRange;
 use super::mutator_impl::PeepholeMutator;
 
-use crate::rustc_interface::middle::mir::BasicBlockData;
 use crate::rustc_interface::middle::mir::Body;
 use crate::rustc_interface::middle::mir::BorrowKind;
-use crate::rustc_interface::middle::mir::FakeReadCause;
-use crate::rustc_interface::middle::mir::MutBorrowKind;
 use crate::rustc_interface::middle::mir::Place as MirPlace;
 use crate::rustc_interface::middle::mir::PlaceRef;
 use crate::rustc_interface::middle::mir::Rvalue;
@@ -30,46 +23,39 @@ use crate::rustc_interface::middle::mir::StatementKind;
 use crate::rustc_interface::middle::mir::Terminator;
 use crate::rustc_interface::middle::mir::TerminatorKind;
 use crate::rustc_interface::middle::ty::Region;
-use crate::rustc_interface::middle::ty::RegionKind;
 use crate::rustc_interface::middle::ty::RegionVid;
 use crate::rustc_interface::middle::ty::Ty;
 use crate::rustc_interface::middle::ty::TyCtxt;
 
-use pcs::free_pcs::CapabilityKind;
-use pcs::free_pcs::PcgLocation;
+use pcg::free_pcs::PcgLocation;
 
-use pcs::combined_pcs::PCGNode;
-use pcs::combined_pcs::PCGNodeLike;
+use pcg::pcg::EvalStmtPhase;
 
-use pcs::utils::maybe_old::MaybeOldPlace;
-use pcs::utils::place::Place;
-use pcs::utils::PlaceRepacker;
+use pcg::utils::place::Place;
+use pcg::utils::CompilerCtxt;
 
-use pcs::borrow_pcg::borrow_pcg_edge::BlockedNode;
-use pcs::borrow_pcg::borrow_pcg_edge::BorrowPCGEdgeLike;
-use pcs::borrow_pcg::borrow_pcg_edge::BorrowPCGEdgeRef;
-use pcs::borrow_pcg::borrow_pcg_edge::LocalNode;
-use pcs::borrow_pcg::edge::borrow::BorrowEdge;
-use pcs::borrow_pcg::edge::kind::BorrowPCGEdgeKind;
-use pcs::borrow_pcg::edge_data::EdgeData;
-use pcs::borrow_pcg::graph::BorrowsGraph;
-use pcs::borrow_pcg::region_projection::RegionProjection;
+use pcg::borrow_pcg::borrow_pcg_edge::BlockedNode;
+use pcg::borrow_pcg::borrow_pcg_edge::BorrowPcgEdgeLike;
+use pcg::borrow_pcg::borrow_pcg_edge::BorrowPcgEdgeRef;
+use pcg::borrow_pcg::edge::kind::BorrowPcgEdgeKind;
+use pcg::borrow_pcg::edge_data::EdgeData;
+use pcg::borrow_pcg::graph::BorrowsGraph;
 
 fn places_blocking<'mir, 'tcx>(
     place: Place<'tcx>,
     borrows_graph: &BorrowsGraph<'tcx>,
-    repacker: PlaceRepacker<'mir, 'tcx>,
-    is_blocking_edge: impl Fn(&HashSet<BorrowPCGEdgeKind>) -> bool,
-    is_valid_edge: impl Fn(&BorrowPCGEdgeKind) -> bool,
+    ctx: CompilerCtxt<'mir, 'tcx>,
+    is_blocking_edge: impl Fn(&HashSet<BorrowPcgEdgeKind>) -> bool,
+    is_valid_edge: impl Fn(&BorrowPcgEdgeKind) -> bool,
 ) -> HashSet<Place<'tcx>> {
     // println!();
     // println!("PLACES BLOCKING {:?}", &place);
     let node = place.into();
-    let mut to_visit: Vec<(BorrowPCGEdgeRef<'_, '_>,
-                           HashSet<BorrowPCGEdgeKind<'_>>)> =
+    let mut to_visit: Vec<(BorrowPcgEdgeRef<'_, '_>,
+                           HashSet<BorrowPcgEdgeKind<'_>>)> =
         borrows_graph
         .frozen_graph()
-        .get_edges_blocking(node, repacker)
+        .get_edges_blocking(node, ctx)
         .into_iter()
         .filter(|edge| is_valid_edge(edge.kind()))
         .map(|edge| (edge, HashSet::new()))
@@ -81,21 +67,19 @@ fn places_blocking<'mir, 'tcx>(
         kind_set.insert(curr.kind().clone());
         if is_blocking_edge(&kind_set) {
             let mut nodes: Vec<_> = curr
-                .blocked_by_nodes(repacker)
-                .drain()
+                .blocked_by_nodes(ctx)
                 .flat_map(local_node_to_current_place)
                 .collect();
             places.extend(nodes.drain(..));
         }
-        let mut incident_nodes = curr.blocked_by_nodes(repacker);
+        let mut incident_nodes = curr.blocked_by_nodes(ctx);
         // println!("ADJACENT NODES {:?}", &incident_nodes);
         let mut adjacent_edges = incident_nodes
-            .drain()
             .map(BlockedNode::from)
             .flat_map(|node| {
                 borrows_graph
                     .frozen_graph()
-                    .get_edges_blocking(node, repacker)
+                    .get_edges_blocking(node, ctx)
             })
             .filter(|edge| is_valid_edge(edge.kind()))
             .map(|edge| (edge, kind_set.clone()));
@@ -131,17 +115,15 @@ fn places_to_statements<'tcx>(
 pub struct BorrowExpiryOrder;
 
 impl PeepholeMutator for BorrowExpiryOrder {
-    fn generate_mutants<'tcx>(
-        tcx: TyCtxt<'tcx>,
+    fn generate_mutants<'mir, 'tcx>(
+        ctx: CompilerCtxt<'mir, 'tcx>,
         body: &Body<'tcx>,
         curr: &PcgLocation<'tcx>,
         next: &PcgLocation<'tcx>,
     ) -> Vec<Mutant<'tcx>> {
-        let repacker = PlaceRepacker::new(&body, tcx);
-
         let mut mutant_sequences: Vec<(Vec<Statement<'tcx>>, Body<'tcx>)> = vec![];
 
-        let borrows_graph = next.borrows.post_operands().graph();
+        let borrows_graph = next.states[EvalStmtPhase::PostOperands].borrow_pcg().graph();
 
         let mutably_borrowed_places: HashSet<Place<'tcx>> =
             borrowed_places(&borrows_graph, is_mut)
@@ -154,18 +136,18 @@ impl PeepholeMutator for BorrowExpiryOrder {
                 let mut blocking_places = places_blocking(
                     place,
                     &borrows_graph,
-                    repacker,
+                    ctx,
                     |kind_set| {
                        kind_set
                         .iter()
                         .any(|kind| match kind {
-                            BorrowPCGEdgeKind::Borrow(borrow_edge) =>
+                            BorrowPcgEdgeKind::Borrow(borrow_edge) =>
                                 borrow_edge.kind().iter().any(|kind| is_mut(*kind)),
                             _ => false,
                         })
                     },
                     |kind| match kind {
-                        BorrowPCGEdgeKind::Borrow(borrow_edge) =>
+                        BorrowPcgEdgeKind::Borrow(borrow_edge) =>
                             borrow_edge.kind().iter().any(|kind| is_mut(*kind)),
                         _ => true,
                     },
@@ -174,7 +156,7 @@ impl PeepholeMutator for BorrowExpiryOrder {
                     if has_named_local(blocking_place, body) {
                         let mut mutant_body = body.clone();
                         let mut mutant_sequence = places_to_statements(
-                            tcx,
+                            ctx.tcx(),
                             &mut mutant_body,
                             vec![place, blocking_place],
                         );
@@ -266,17 +248,15 @@ impl PeepholeMutator for BorrowExpiryOrder {
 pub struct AbstractExpiryOrder;
 
 impl PeepholeMutator for AbstractExpiryOrder {
-    fn generate_mutants<'tcx>(
-        tcx: TyCtxt<'tcx>,
+    fn generate_mutants<'mir, 'tcx>(
+        ctx: CompilerCtxt<'mir, 'tcx>,
         body: &Body<'tcx>,
         curr: &PcgLocation<'tcx>,
         next: &PcgLocation<'tcx>,
     ) -> Vec<Mutant<'tcx>> {
-        let repacker = PlaceRepacker::new(&body, tcx);
-
         let mut mutant_sequences: Vec<(Vec<Statement<'tcx>>, Body<'tcx>)> = vec![];
 
-        let borrows_graph = next.borrows.post_operands().graph();
+        let borrows_graph = next.states[EvalStmtPhase::PostOperands].borrow_pcg().graph();
 
         let mutably_borrowed_places: HashSet<Place<'tcx>> =
             borrowed_places(&borrows_graph, is_mut)
@@ -289,24 +269,24 @@ impl PeepholeMutator for AbstractExpiryOrder {
                 let mut blocking_places = places_blocking(
                     place,
                     &borrows_graph,
-                    repacker,
+                    ctx,
                     |kind_set| {
                        kind_set
                         .iter()
                         .any(|kind| match kind {
-                            BorrowPCGEdgeKind::Abstraction(_) => true,
+                            BorrowPcgEdgeKind::Abstraction(_) => true,
                             _ => false,
                         }) &&
                             kind_set
                             .iter()
                             .any(|kind| match kind {
-                                BorrowPCGEdgeKind::Borrow(borrow_edge) =>
+                                BorrowPcgEdgeKind::Borrow(borrow_edge) =>
                                     borrow_edge.kind().iter().any(|kind| is_mut(*kind)),
                                 _ => false,
                             })
                     },
                     |kind| match kind {
-                        BorrowPCGEdgeKind::Borrow(borrow_edge) =>
+                        BorrowPcgEdgeKind::Borrow(borrow_edge) =>
                             borrow_edge.kind().iter().any(|kind| is_mut(*kind)),
                         _ => true,
                     },
@@ -315,7 +295,7 @@ impl PeepholeMutator for AbstractExpiryOrder {
                     if has_named_local(blocking_place, body) {
                         let mut mutant_body = body.clone();
                         let mut mutant_sequence = places_to_statements(
-                            tcx,
+                            ctx.tcx(),
                             &mut mutant_body,
                             vec![place, blocking_place],
                         );

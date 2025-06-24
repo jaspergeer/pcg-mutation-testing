@@ -1,11 +1,12 @@
 use serde::Serialize;
 
 use crate::rustc_interface::middle::mir::Body;
-use crate::rustc_interface::middle::ty::TyCtxt;
 
-use pcs::free_pcs::PcgBasicBlock;
-use pcs::free_pcs::PcgLocation;
-use pcs::FpcsOutput;
+use pcg::PcgOutput;
+use pcg::free_pcs::PcgLocation;
+use pcg::utils::CompilerCtxt;
+
+use std::alloc::System;
 
 #[derive(Serialize, Clone)]
 pub struct MutantLocation {
@@ -28,8 +29,8 @@ pub struct Mutant<'tcx> {
 pub trait Mutator {
     fn generate_mutants<'mir, 'tcx>(
         &mut self,
-        tcx: TyCtxt<'tcx>,
-        analysis: &mut FpcsOutput<'mir, 'tcx>,
+        ctx: CompilerCtxt<'mir, 'tcx>,
+        analysis: &mut PcgOutput<'mir, 'tcx, System>,
         body: &Body<'tcx>,
     ) -> Vec<Mutant<'tcx>>;
     fn run_ratio(&mut self) -> (u32, u32);
@@ -37,8 +38,8 @@ pub trait Mutator {
 }
 
 pub trait PeepholeMutator {
-    fn generate_mutants<'tcx>(
-        tcx: TyCtxt<'tcx>,
+    fn generate_mutants<'mir, 'tcx>(
+        ctx: CompilerCtxt<'mir, 'tcx>,
         body: &Body<'tcx>,
         curr: &PcgLocation<'tcx>,
         next: &PcgLocation<'tcx>,
@@ -50,8 +51,8 @@ pub trait PeepholeMutator {
 impl<T: PeepholeMutator> Mutator for T {
     fn generate_mutants<'mir, 'tcx>(
         &mut self,
-        tcx: TyCtxt<'tcx>,
-        analysis: &mut FpcsOutput<'mir, 'tcx>,
+        ctx: CompilerCtxt<'mir, 'tcx>,
+        analysis: &mut PcgOutput<'mir, 'tcx, System>,
         body: &Body<'tcx>,
     ) -> Vec<Mutant<'tcx>> {
         body.basic_blocks
@@ -62,7 +63,7 @@ impl<T: PeepholeMutator> Mutator for T {
                         .statements
                         .iter()
                         .zip(pcg_bb.statements.iter().skip(1))
-                        .flat_map(|(curr, next)| T::generate_mutants(tcx, body, curr, next))
+                        .flat_map(|(curr, next)| T::generate_mutants(ctx, body, curr, next))
                         .collect::<Vec<_>>()
                 })
             })
