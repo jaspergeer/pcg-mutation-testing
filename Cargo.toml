@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 bumpalo = { version = "3.12.0", features = ["collections"] }
-pcs = { path = "pcg" }
+pcg = { path = "pcg" }
 serde = { version = "1.0.133", features = ["derive"] }
 serde_json = { version = "1.0.64", features = ["preserve_order"] }
 serde_derive = "1.0"
@@ -14,6 +14,8 @@ toml = "0.7"
 indexmap = { version = "2.8.0", features = ["serde"] }
 reqwest = { version = "^0.11", features = ["blocking"] }
 rustversion = "1.0"
+chrono = "0.4.41"
+derive_more = "2.0.1"
 
 [package.metadata.rust-analyzer]
 # This crate uses #[feature(rustc_private)]
