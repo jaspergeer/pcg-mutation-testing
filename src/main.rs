@@ -238,47 +238,43 @@ fn run_mutation_tests<'tcx>(
         if !item_name.contains("de::deserialize_map") {
             match kind {
                 hir::def::DefKind::Fn | hir::def::DefKind::AssocFn => {
-                    let body_with_borrowck_facts = body_map.get(&def_id).unwrap();
+                    if let Some(body_with_borrowck_facts) = body_map.get(&def_id) {
+                        let safety = tcx.fn_sig(def_id).skip_binder().safety();
+                        if safety == hir::Safety::Unsafe {
+                            continue;
+                        }
+                        std::env::set_var("PCG_VALIDITY_CHECKS", "false");
 
-                    let safety = tcx.fn_sig(def_id).skip_binder().safety();
-                    if safety == hir::Safety::Unsafe {
-                        continue;
+                        let borrow_checker_impl = BorrowCheckerImpl::new(tcx, body_with_borrowck_facts);
+                        let ctx: CompilerCtxt<'_, '_> = CompilerCtxt::new(
+                            &body_with_borrowck_facts.body,
+                            tcx,
+                            &borrow_checker_impl,
+                        );
+                        let analysis = run_pcg(
+                            &body_with_borrowck_facts.body,
+                            ctx.tcx(),
+                            ctx.bc(),
+                            System,
+                            None,
+                        );
+
+                        run_mutation_tests_for_body(
+                            ctx,
+                            compiler,
+                            mutators,
+                            &mut mutants_log,
+                            &mut mutator_results,
+                            &mut passed_bodies,
+                            def_id,
+                            body_with_borrowck_facts,
+                            analysis,
+                        );
                     }
-                    std::env::set_var("PCG_VALIDITY_CHECKS", "false");
-
-                    let borrow_checker_impl = BorrowCheckerImpl::new(tcx, body_with_borrowck_facts);
-                    let ctx: CompilerCtxt<'_, '_> = CompilerCtxt::new(
-                        &body_with_borrowck_facts.body,
-                        tcx,
-                        &borrow_checker_impl,
-                    );
-                    let analysis = run_pcg(
-                        &body_with_borrowck_facts.body,
-                        ctx.tcx(),
-                        ctx.bc(),
-                        System,
-                        None,
-                    );
-
-                    run_mutation_tests_for_body(
-                        ctx,
-                        compiler,
-                        mutators,
-                        &mut mutants_log,
-                        &mut mutator_results,
-                        &mut passed_bodies,
-                        def_id,
-                        body_with_borrowck_facts,
-                        analysis,
-                    );
                 }
                 _ => {}
             }
         }
-    }
-
-    if env_feature_enabled("PCG_VISUALIZATION").unwrap_or(false) {
-        // run_pcg_on_all_fns(&passed_bodies, tcx);
     }
 
     if let Some(crate_name) = cargo_crate_name() {

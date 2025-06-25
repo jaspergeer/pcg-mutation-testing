@@ -16,6 +16,7 @@ reqwest = { version = "^0.11", features = ["blocking"] }
 rustversion = "1.0"
 chrono = "0.4.41"
 derive_more = "2.0.1"
+rustc_borrowck = { path = "rustc_borrowck", package = "rustc_borrowck" }
 
 [package.metadata.rust-analyzer]
 # This crate uses #[feature(rustc_private)]

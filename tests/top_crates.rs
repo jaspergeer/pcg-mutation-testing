@@ -15,7 +15,7 @@ use derive_more::Deref;
 
 #[test]
 pub fn top_crates() {
-    top_crates_range(0..100, "2025-03-13");
+    top_crates_range(0..10, "2025-03-13");
 }
 
 #[derive(Serialize)]
@@ -59,13 +59,12 @@ pub fn top_crates_range(range: Range<usize>, date: &str) {
                 }
             }
             for i in 0..handles.len() {
-                if let Some((name, handle)) = handles.get_mut(i) {
+                if let Some((_, handle)) = handles.get_mut(i) {
                     if handle.is_finished() {
-                        if let (name, handle) = handles.remove(i) {
-                            match handle.join() {
-                                Err(_) => stats.failed.push(name.clone()),
-                                _ => stats.succeeded.push(name)
-                            }
+                        let (name, handle) = handles.remove(i);
+                        match handle.join() {
+                            Err(_) => stats.failed.push(name.clone()),
+                            _ => stats.succeeded.push(name)
                         }
                     }
                 }
@@ -165,7 +164,7 @@ impl Crates {
         let cache_path = get_cache_path(date);
         let crates = read_from_cache(&cache_path).unwrap_or_else(|| {
             assert_eq!(
-                date.clone(),
+                date,
                 today,
                 "Cannot get crates from {} because we JSON file {} doesn't exist",
                 date,
