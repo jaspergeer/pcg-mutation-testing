@@ -72,9 +72,9 @@ fn places_blocking<'mir, 'tcx>(
                 .collect();
             places.extend(nodes.drain(..));
         }
-        let mut incident_nodes = curr.blocked_by_nodes(ctx);
+        let incident_nodes = curr.blocked_by_nodes(ctx);
         // println!("ADJACENT NODES {:?}", &incident_nodes);
-        let mut adjacent_edges = incident_nodes
+        let adjacent_edges = incident_nodes
             .map(BlockedNode::from)
             .flat_map(|node| {
                 borrows_graph
@@ -155,7 +155,7 @@ impl PeepholeMutator for BorrowExpiryOrder {
                 for blocking_place in blocking_places.drain() {
                     if has_named_local(blocking_place, body) {
                         let mut mutant_body = body.clone();
-                        let mut mutant_sequence = places_to_statements(
+                        let mutant_sequence = places_to_statements(
                             ctx.tcx(),
                             &mut mutant_body,
                             vec![place, blocking_place],
@@ -181,7 +181,7 @@ impl PeepholeMutator for BorrowExpiryOrder {
 
                 let bb_terminator = bb.terminator.take();
                 let tail_bb_index = fresh_basic_block(&mut mutant_body);
-                let mut tail_bb = mutant_body
+                let tail_bb = mutant_body
                     .basic_blocks_mut()
                     .get_mut(tail_bb_index)
                     .unwrap();
@@ -294,7 +294,7 @@ impl PeepholeMutator for AbstractExpiryOrder {
                 for blocking_place in blocking_places.drain() {
                     if has_named_local(blocking_place, body) {
                         let mut mutant_body = body.clone();
-                        let mut mutant_sequence = places_to_statements(
+                        let mutant_sequence = places_to_statements(
                             ctx.tcx(),
                             &mut mutant_body,
                             vec![place, blocking_place],
@@ -320,7 +320,7 @@ impl PeepholeMutator for AbstractExpiryOrder {
 
                 let bb_terminator = bb.terminator.take();
                 let tail_bb_index = fresh_basic_block(&mut mutant_body);
-                let mut tail_bb = mutant_body
+                let tail_bb = mutant_body
                     .basic_blocks_mut()
                     .get_mut(tail_bb_index)
                     .unwrap();

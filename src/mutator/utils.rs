@@ -3,7 +3,6 @@ use pcg::borrow_pcg::borrow_pcg_edge::LocalNode;
 use pcg::borrow_pcg::edge::borrow::BorrowEdge;
 use pcg::borrow_pcg::edge::kind::BorrowPcgEdgeKind;
 use pcg::borrow_pcg::graph::BorrowsGraph;
-use pcg::borrow_pcg::region_projection::MaybeRemoteRegionProjectionBase;
 
 use pcg::utils::maybe_remote::MaybeRemotePlace;
 use pcg::utils::maybe_old::MaybeOldPlace;

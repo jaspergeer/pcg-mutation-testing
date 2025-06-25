@@ -45,7 +45,7 @@ impl PeepholeMutator for BlockMutableBorrow {
             body: &Body<'tcx>,
             curr: &PcgLocation<'tcx>,
             lent_place: MirPlace<'tcx>,
-            region: Region<'tcx>,
+            _region: Region<'tcx>,
             borrow_kind: BorrowKind,
         ) -> Option<Mutant<'tcx>> {
             let mut mutant_body = body.clone();

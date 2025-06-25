@@ -6,8 +6,8 @@ use pcg_evaluation::mutator::Mutant;
 use pcg_evaluation::mutator::MutantRange;
 use pcg_evaluation::mutator::Mutator;
 
-use pcg_evaluation::mutator::expiry_order::BorrowExpiryOrder;
 use pcg_evaluation::mutator::expiry_order::AbstractExpiryOrder;
+use pcg_evaluation::mutator::expiry_order::BorrowExpiryOrder;
 use pcg_evaluation::mutator::move_from_borrowed::MoveFromBorrowed;
 use pcg_evaluation::mutator::mutably_lend_shared::MutablyLendShared;
 use pcg_evaluation::mutator::read_from_write::ReadFromWriteOnly;
@@ -16,13 +16,13 @@ use pcg_evaluation::mutator::write_to_shared::WriteToShared;
 use pcg_evaluation::utils::env_feature_enabled;
 
 use std::alloc::System;
-use std::fs::File;
-use std::io::Write;
-use std::path::PathBuf;
-use std::path::Path;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fs::File;
+use std::io::Write;
+use std::path::Path;
+use std::path::PathBuf;
 
 use indexmap::map::IndexMap;
 
@@ -57,8 +57,8 @@ use pcg_evaluation::rustc_interface::interface::Config;
 
 use pcg_evaluation::rustc_interface::ast::Crate;
 
-use pcg::pcg::BodyWithBorrowckFacts;
 use pcg::borrow_checker::r#impl::BorrowCheckerImpl;
+use pcg::pcg::BodyWithBorrowckFacts;
 use pcg::run_pcg;
 use pcg::utils::CompilerCtxt;
 use pcg::PcgOutput;
@@ -96,7 +96,8 @@ fn mir_borrowck<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> ProvidedValue<'t
         consumers::get_body_with_borrowck_facts(tcx, def_id, consumer_opts)
     };
     unsafe {
-        let body: pcg::rustc_interface::borrowck::BodyWithBorrowckFacts<'tcx> = std::mem::transmute(body_with_facts);
+        let body: pcg::rustc_interface::borrowck::BodyWithBorrowckFacts<'tcx> =
+            std::mem::transmute(body_with_facts);
         let body: BodyWithBorrowckFacts<'tcx> = body.into();
         let body: BodyWithBorrowckFacts<'static> = std::mem::transmute(body);
         BODIES.with(|state| {
@@ -170,7 +171,12 @@ fn run_mutation_tests<'tcx>(
 
                         let (borrowck_result, mutant_body_with_borrowck_facts) = {
                             let consumer_opts = consumers::ConsumerOptions::PoloniusInputFacts;
-                            rustc_borrowck::do_mir_borrowck(ctx.tcx(), &body, &promoted, Some(consumer_opts))
+                            rustc_borrowck::do_mir_borrowck(
+                                ctx.tcx(),
+                                &body,
+                                &promoted,
+                                Some(consumer_opts),
+                            )
                         };
                         if let Some(_) = borrowck_result.tainted_by_errors {
                             mutator_data.failed += 1;
@@ -189,8 +195,7 @@ fn run_mutation_tests<'tcx>(
                             if env_feature_enabled("PCG_VISUALIZATION").unwrap_or(false) {
                                 unsafe {
                                     let body: pcg::rustc_interface::borrowck::BodyWithBorrowckFacts<'_> = std::mem::transmute(*mutant_body_with_borrowck_facts.unwrap());
-                                    passed_bodies
-                                        .insert(def_id, body.into());
+                                    passed_bodies.insert(def_id, body.into());
                                 }
                             }
                             BorrowCheckInfo::Passed
@@ -242,8 +247,18 @@ fn run_mutation_tests<'tcx>(
                     std::env::set_var("PCG_VALIDITY_CHECKS", "false");
 
                     let borrow_checker_impl = BorrowCheckerImpl::new(tcx, body_with_borrowck_facts);
-                    let ctx: CompilerCtxt<'_, '_> = CompilerCtxt::new(&body_with_borrowck_facts.body, tcx, &borrow_checker_impl);
-                    let analysis = run_pcg(&body_with_borrowck_facts.body, ctx.tcx(), ctx.bc(), System, None);
+                    let ctx: CompilerCtxt<'_, '_> = CompilerCtxt::new(
+                        &body_with_borrowck_facts.body,
+                        tcx,
+                        &borrow_checker_impl,
+                    );
+                    let analysis = run_pcg(
+                        &body_with_borrowck_facts.body,
+                        ctx.tcx(),
+                        ctx.bc(),
+                        System,
+                        None,
+                    );
 
                     run_mutation_tests_for_body(
                         ctx,
@@ -257,7 +272,7 @@ fn run_mutation_tests<'tcx>(
                         analysis,
                     );
                 }
-                _ => {},
+                _ => {}
             }
         }
     }
@@ -268,14 +283,10 @@ fn run_mutation_tests<'tcx>(
 
     if let Some(crate_name) = cargo_crate_name() {
         let mut crate_name_suffix = 0;
-        let mut mutants_log_path =
-            results_dir
-                .join(crate_name.clone() + "-mutants")
-                .with_extension("json");
-        let mut mutator_results_path =
-            results_dir
-                .join(crate_name.clone())
-                .with_extension("json");
+        let mut mutants_log_path = results_dir
+            .join(crate_name.clone() + "-mutants")
+            .with_extension("json");
+        let mut mutator_results_path = results_dir.join(crate_name.clone()).with_extension("json");
 
         while Path::exists(&*mutants_log_path) {
             let unique_crate_name = crate_name.clone() + "-" + &crate_name_suffix.to_string();
@@ -283,9 +294,7 @@ fn run_mutation_tests<'tcx>(
             mutants_log_path = results_dir
                 .join(unique_crate_name.clone() + "-mutants")
                 .with_extension("json");
-            mutator_results_path = results_dir
-                .join(unique_crate_name)
-                .with_extension("json");
+            mutator_results_path = results_dir.join(unique_crate_name).with_extension("json");
         }
 
         let mut mutants_log_file =
@@ -303,7 +312,6 @@ fn run_mutation_tests<'tcx>(
             .expect("Failed to write results to file");
     }
 }
-
 
 impl Callbacks for MutatorCallbacks {
     fn config(&mut self, config: &mut Config) {
@@ -359,7 +367,6 @@ fn main() {
         _ => std::env::current_dir().unwrap(),
     };
 
-    // NOTE: MutablyLendReadOnly and WriteToReadOnly are no longer valid
     let mut callbacks = MutatorCallbacks {
         mutators: vec![
             Box::new(BorrowExpiryOrder),
@@ -369,7 +376,7 @@ fn main() {
             Box::new(WriteToShared),
             Box::new(MoveFromBorrowed),
         ],
-        results_dir: results_dir,
+        results_dir,
     };
     driver::RunCompiler::new(&rustc_args, &mut callbacks).run();
 }

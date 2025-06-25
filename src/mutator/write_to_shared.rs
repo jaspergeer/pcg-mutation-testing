@@ -27,7 +27,7 @@ impl PeepholeMutator for WriteToShared {
         ctx: CompilerCtxt<'mir, 'tcx>,
         body: &Body<'tcx>,
         curr: &PcgLocation<'tcx>,
-        next: &PcgLocation<'tcx>,
+        _next: &PcgLocation<'tcx>,
     ) -> Vec<Mutant<'tcx>> {
         let shared_in_curr = {
             let borrows_graph = curr.states[EvalStmtPhase::PostMain].borrow_pcg().graph();
