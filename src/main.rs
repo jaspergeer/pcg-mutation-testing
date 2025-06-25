@@ -6,17 +6,12 @@ use pcg_evaluation::mutator::Mutant;
 use pcg_evaluation::mutator::MutantRange;
 use pcg_evaluation::mutator::Mutator;
 
-use pcg_evaluation::mutator::block_mutable_borrow::BlockMutableBorrow;
 use pcg_evaluation::mutator::expiry_order::BorrowExpiryOrder;
 use pcg_evaluation::mutator::expiry_order::AbstractExpiryOrder;
 use pcg_evaluation::mutator::move_from_borrowed::MoveFromBorrowed;
-use pcg_evaluation::mutator::mutably_lend_read::MutablyLendReadOnly;
 use pcg_evaluation::mutator::mutably_lend_shared::MutablyLendShared;
 use pcg_evaluation::mutator::read_from_write::ReadFromWriteOnly;
-use pcg_evaluation::mutator::shallow_exclusive_read::ShallowExclusiveRead;
-use pcg_evaluation::mutator::write_to_read::WriteToReadOnly;
 use pcg_evaluation::mutator::write_to_shared::WriteToShared;
-use pcg_evaluation::mutator::drop_borrowed::DropBorrowed;
 
 use pcg_evaluation::utils::env_feature_enabled;
 
@@ -44,15 +39,12 @@ use pcg_evaluation::rustc_interface::middle::util::Providers;
 
 use pcg_evaluation::rustc_interface::session::Session;
 
-use pcg_evaluation::rustc_interface::driver::catch_fatal_errors;
 use pcg_evaluation::rustc_interface::driver::Callbacks;
 use pcg_evaluation::rustc_interface::driver::DEFAULT_LOCALE_RESOURCES;
 
 use pcg_evaluation::errors::get_registered_errors;
 use pcg_evaluation::errors::initialize_error_tracking;
 use pcg_evaluation::errors::track_body_error_codes;
-
-use pcg_evaluation::rustc_interface::hir::def_id::CrateNum;
 
 use pcg_evaluation::rustc_interface::driver;
 use pcg_evaluation::rustc_interface::driver::Compilation;
@@ -104,7 +96,8 @@ fn mir_borrowck<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> ProvidedValue<'t
         consumers::get_body_with_borrowck_facts(tcx, def_id, consumer_opts)
     };
     unsafe {
-        let body: BodyWithBorrowckFacts<'tcx> = body_with_facts.into();
+        let body: pcg::rustc_interface::borrowck::BodyWithBorrowckFacts<'tcx> = std::mem::transmute(body_with_facts);
+        let body: BodyWithBorrowckFacts<'tcx> = body.into();
         let body: BodyWithBorrowckFacts<'static> = std::mem::transmute(body);
         BODIES.with(|state| {
             let mut map = state.borrow_mut();
@@ -112,7 +105,7 @@ fn mir_borrowck<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> ProvidedValue<'t
         });
     }
     let mut providers = Providers::default();
-    pcg::rustc_interface::borrowck::provide(&mut providers);
+    borrowck::provide(&mut providers);
     let original_mir_borrowck = providers.mir_borrowck;
     original_mir_borrowck(tcx, def_id)
 }
@@ -177,7 +170,7 @@ fn run_mutation_tests<'tcx>(
 
                         let (borrowck_result, mutant_body_with_borrowck_facts) = {
                             let consumer_opts = consumers::ConsumerOptions::PoloniusInputFacts;
-                            borrowck::do_mir_borrowck(ctx.tcx(), &body, &promoted, Some(consumer_opts))
+                            rustc_borrowck::do_mir_borrowck(ctx.tcx(), &body, &promoted, Some(consumer_opts))
                         };
                         if let Some(_) = borrowck_result.tainted_by_errors {
                             mutator_data.failed += 1;
@@ -194,8 +187,11 @@ fn run_mutation_tests<'tcx>(
                         } else {
                             mutator_data.passed += 1;
                             if env_feature_enabled("PCG_VISUALIZATION").unwrap_or(false) {
-                                passed_bodies
-                                    .insert(def_id, (*mutant_body_with_borrowck_facts.unwrap()).into());
+                                unsafe {
+                                    let body: pcg::rustc_interface::borrowck::BodyWithBorrowckFacts<'_> = std::mem::transmute(*mutant_body_with_borrowck_facts.unwrap());
+                                    passed_bodies
+                                        .insert(def_id, body.into());
+                                }
                             }
                             BorrowCheckInfo::Passed
                         }
@@ -372,9 +368,6 @@ fn main() {
             Box::new(ReadFromWriteOnly),
             Box::new(WriteToShared),
             Box::new(MoveFromBorrowed),
-            // vvv Not included in paper
-            // Box::new(BlockMutableBorrow),
-            // Box::new(ShallowExclusiveRead),
         ],
         results_dir: results_dir,
     };
