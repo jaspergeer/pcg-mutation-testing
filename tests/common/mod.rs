@@ -65,9 +65,9 @@ pub fn run_pcg_on_crate_in_dir(dir: &Path, options: RunOnCrateOptions) {
         .args(build_args)
         .current_dir(&cwd)
         .status()
-        .expect("Failed to build pcg_bin");
+        .expect("Failed to build pcg-evaluation-bin");
 
-    assert!(cargo_build.success(), "Failed to build pcg_bin");
+    assert!(cargo_build.success(), "Failed to build pcg-evaluation-bin");
     let target = if matches!(options.target(), Target::Release) {
         "release"
     } else {

@@ -1,3 +1,4 @@
+
 pub mod block_mutable_borrow;
 pub mod expiry_order;
 pub mod move_from_borrowed;
@@ -11,3 +12,4 @@ pub use self::mutator_impl::Mutant;
 pub use self::mutator_impl::MutantLocation;
 pub use self::mutator_impl::MutantRange;
 pub use self::mutator_impl::Mutator;
+pub use self::mutator_impl::Mutation;

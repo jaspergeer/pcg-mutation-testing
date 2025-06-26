@@ -1,10 +1,12 @@
 #![feature(rustc_private)]
+#![feature(let_chains)]
 
 use pcg_evaluation::MutatorData;
 
 use pcg_evaluation::mutator::Mutant;
 use pcg_evaluation::mutator::MutantRange;
 use pcg_evaluation::mutator::Mutator;
+use pcg_evaluation::mutator::Mutation;
 
 use pcg_evaluation::mutator::expiry_order::AbstractExpiryOrder;
 use pcg_evaluation::mutator::expiry_order::BorrowExpiryOrder;
@@ -63,6 +65,8 @@ use pcg::run_pcg;
 use pcg::utils::CompilerCtxt;
 use pcg::PcgOutput;
 
+use tracing::info;
+
 thread_local! {
     pub static BODIES:
         RefCell<HashMap<LocalDefId, BodyWithBorrowckFacts<'static>>> =
@@ -86,7 +90,7 @@ struct LogEntry {
 }
 
 struct MutatorCallbacks {
-    mutators: Vec<Box<dyn Mutator + Send>>,
+    mutations: Vec<Box<dyn Mutation + Send>>,
     results_dir: PathBuf,
 }
 
@@ -119,11 +123,11 @@ fn cargo_crate_name() -> Option<String> {
     std::env::var("CARGO_CRATE_NAME").ok()
 }
 
-// TODO interleave pcg generation and mutation testing
+// Run every Mutation on each MIR body
 fn run_mutation_tests<'tcx>(
     tcx: TyCtxt<'tcx>,
     compiler: &Compiler,
-    mutators: &mut Vec<Box<dyn Mutator + Send>>,
+    mutations: &mut Vec<Box<dyn Mutation + Send>>,
     results_dir: &PathBuf,
 ) {
     if in_cargo_crate() && std::env::var("CARGO_PRIMARY_PACKAGE").is_err() {
@@ -132,10 +136,11 @@ fn run_mutation_tests<'tcx>(
         return;
     }
 
+    // Run every Mutation on a given MIR body
     fn run_mutation_tests_for_body<'mir, 'tcx>(
         ctx: CompilerCtxt<'mir, 'tcx>,
         compiler: &Compiler,
-        mutators: &mut Vec<Box<dyn Mutator + Send>>,
+        mutations: &mut Vec<Box<dyn Mutation + Send>>,
         mutants_log: &mut IndexMap<String, LogEntry>,
         mutator_results: &mut HashMap<String, MutatorData>,
         passed_bodies: &mut HashMap<LocalDefId, BodyWithBorrowckFacts<'tcx>>,
@@ -143,9 +148,9 @@ fn run_mutation_tests<'tcx>(
         body_with_borrowck_facts: &'mir BodyWithBorrowckFacts<'tcx>,
         mut analysis: PcgOutput<'mir, 'tcx, System>,
     ) {
-        for mutator in mutators.iter_mut() {
+        for mutation in mutations.iter_mut() {
             let mutator_data = mutator_results
-                .entry(mutator.name())
+                .entry(mutation.name())
                 .or_insert(MutatorData {
                     instances: 0,
                     passed: 0,
@@ -155,16 +160,15 @@ fn run_mutation_tests<'tcx>(
             let body = &body_with_borrowck_facts.body;
             let promoted = &body_with_borrowck_facts.promoted;
 
-            let (numerator, denominator) = mutator.run_ratio();
-            let mutants = mutator.generate_mutants(ctx, &mut analysis, &body);
+            let mutation = unsafe { std::mem::transmute(&*mutation) };
 
-            for Mutant { body, range, info } in mutants {
+            let mut mutator = Mutator::new(mutation, ctx, &mut analysis, body);
+
+            while let Some(Mutant { body, range, info }) = mutator.next() {
                 mutator_data.instances += 1;
                 let do_borrowck = env_feature_enabled("DO_BORROWCK").unwrap_or(true);
-                // don't do this at home, kids
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let borrow_check_info = if rand::random_ratio(numerator, denominator)
-                        && do_borrowck
+                    let borrow_check_info = if do_borrowck
                     {
                         track_body_error_codes(def_id);
 
@@ -204,10 +208,10 @@ fn run_mutation_tests<'tcx>(
                     };
                     let log_entry = LogEntry {
                         mutation_type: mutator.name(),
-                        borrow_check_info: borrow_check_info,
+                        borrow_check_info,
                         definition: format!("{def_id:?}"),
-                        range: range,
-                        info: info,
+                        range,
+                        info,
                     };
                     if env_feature_enabled("MUTANTS_LOG").unwrap_or(false) {
                         mutants_log.insert(mutants_log.len().to_string(), log_entry);
@@ -228,27 +232,43 @@ fn run_mutation_tests<'tcx>(
     initialize_error_tracking();
 
     for def_id in tcx.hir().body_owners() {
-        println!("run mutation testing for {def_id:?}");
+        let item_name = tcx.def_path_str(def_id.to_def_id()).to_string();
+        if let Ok(function) = std::env::var("PCG_SKIP_FUNCTION")
+            && function == item_name
+        {
+            tracing::info!(
+                "Skipping function: {item_name} because PCG_SKIP_FUNCTION is set to {function}"
+            );
+            continue;
+        }
+
         let kind = tcx.def_kind(def_id);
         let item_name = tcx.def_path_str(def_id.to_def_id()).to_string();
-        if !item_name.contains("de::deserialize_map") {
             match kind {
                 hir::def::DefKind::Fn | hir::def::DefKind::AssocFn => {
-                    if let Some(body_with_borrowck_facts) = body_map.get(&def_id) {
+                    if let Some(body) = body_map.get(&def_id) {
+
+                        info!(
+                            "{}Running mutation testing on function: {}",
+                            cargo_crate_name().map_or("".to_string(), |name| format!("{name}: ")),
+                            item_name,
+                        );
+                        tracing::info!("Path: {:?}", body.body.span);
+
                         let safety = tcx.fn_sig(def_id).skip_binder().safety();
                         if safety == hir::Safety::Unsafe {
                             continue;
                         }
                         std::env::set_var("PCG_VALIDITY_CHECKS", "false");
 
-                        let borrow_checker_impl = BorrowCheckerImpl::new(tcx, body_with_borrowck_facts);
+                        let borrow_checker_impl = BorrowCheckerImpl::new(tcx, body);
                         let ctx: CompilerCtxt<'_, '_> = CompilerCtxt::new(
-                            &body_with_borrowck_facts.body,
+                            &body.body,
                             tcx,
                             &borrow_checker_impl,
                         );
                         let analysis = run_pcg(
-                            &body_with_borrowck_facts.body,
+                            &body.body,
                             ctx.tcx(),
                             ctx.bc(),
                             System,
@@ -258,19 +278,18 @@ fn run_mutation_tests<'tcx>(
                         run_mutation_tests_for_body(
                             ctx,
                             compiler,
-                            mutators,
+                            mutations,
                             &mut mutants_log,
                             &mut mutator_results,
                             &mut passed_bodies,
                             def_id,
-                            body_with_borrowck_facts,
+                            body,
                             analysis,
                         );
                     }
                 }
                 _ => {}
             }
-        }
     }
 
     if let Some(crate_name) = cargo_crate_name() {
@@ -325,7 +344,7 @@ impl Callbacks for MutatorCallbacks {
     }
 
     fn after_analysis(&mut self, compiler: &Compiler, tcx: TyCtxt<'_>) -> Compilation {
-        run_mutation_tests(tcx, compiler, &mut self.mutators, &self.results_dir);
+        run_mutation_tests(tcx, compiler, &mut self.mutations, &self.results_dir);
         if in_cargo_crate() {
             Compilation::Continue
         } else {
@@ -335,8 +354,14 @@ impl Callbacks for MutatorCallbacks {
 }
 
 fn in_cargo_crate() -> bool {
-    // true
     std::env::var("CARGO_CRATE_NAME").is_ok()
+}
+
+fn init_tracing() {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .with_writer(std::io::stderr)
+        .init();
 }
 
 fn main() {
@@ -360,7 +385,7 @@ fn main() {
     };
 
     let mut callbacks = MutatorCallbacks {
-        mutators: vec![
+        mutations: vec![
             Box::new(BorrowExpiryOrder),
             Box::new(AbstractExpiryOrder),
             Box::new(MutablyLendShared),
@@ -370,5 +395,6 @@ fn main() {
         ],
         results_dir,
     };
+    init_tracing();
     driver::RunCompiler::new(&rustc_args, &mut callbacks).run();
 }

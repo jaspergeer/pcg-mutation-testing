@@ -1,4 +1,5 @@
 #![feature(rustc_private)]
+#![feature(let_chains)]
 
 pub mod rustc_interface;
 pub mod errors;

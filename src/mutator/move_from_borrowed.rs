@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use super::mutator_impl::Mutant;
 use super::mutator_impl::MutantLocation;
 use super::mutator_impl::MutantRange;
-use super::mutator_impl::PeepholeMutator;
+use super::mutator_impl::Mutation;
 
 use crate::rustc_interface::middle::mir::Body;
 use crate::rustc_interface::middle::mir::Operand;
@@ -24,8 +24,9 @@ use pcg::utils::CompilerCtxt;
 
 pub struct MoveFromBorrowed;
 
-impl PeepholeMutator for MoveFromBorrowed {
+impl Mutation for MoveFromBorrowed {
     fn generate_mutants<'mir, 'tcx>(
+        &self,
         ctx: CompilerCtxt<'mir, 'tcx>,
         body: &Body<'tcx>,
         curr: &PcgLocation<'tcx>,
@@ -89,11 +90,7 @@ impl PeepholeMutator for MoveFromBorrowed {
             .collect()
     }
 
-    fn run_ratio(&mut self) -> (u32, u32) {
-        (1, 1)
-    }
-
-    fn name(&mut self) -> String {
+    fn name(&self) -> String {
         "move-from-borrowed".into()
     }
 }

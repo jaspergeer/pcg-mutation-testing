@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use super::mutator_impl::Mutant;
 use super::mutator_impl::MutantLocation;
 use super::mutator_impl::MutantRange;
-use super::mutator_impl::PeepholeMutator;
+use super::mutator_impl::Mutation;
 
 use crate::rustc_interface::middle::mir::Body;
 use crate::rustc_interface::middle::mir::BorrowKind;
@@ -48,8 +48,6 @@ fn places_blocking<'mir, 'tcx>(
     is_blocking_edge: impl Fn(&HashSet<BorrowPcgEdgeKind>) -> bool,
     is_valid_edge: impl Fn(&BorrowPcgEdgeKind) -> bool,
 ) -> HashSet<Place<'tcx>> {
-    // println!();
-    // println!("PLACES BLOCKING {:?}", &place);
     let node = place.into();
     let mut to_visit: Vec<(BorrowPcgEdgeRef<'_, '_>,
                            HashSet<BorrowPcgEdgeKind<'_>>)> =
@@ -63,7 +61,6 @@ fn places_blocking<'mir, 'tcx>(
     let mut places: HashSet<Place<'tcx>> = HashSet::new();
 
     while let Some((curr, mut kind_set)) = to_visit.pop() {
-        // println!("VISIT {:?}", &curr);
         kind_set.insert(curr.kind().clone());
         if is_blocking_edge(&kind_set) {
             let mut nodes: Vec<_> = curr
@@ -73,7 +70,6 @@ fn places_blocking<'mir, 'tcx>(
             places.extend(nodes.drain(..));
         }
         let incident_nodes = curr.blocked_by_nodes(ctx);
-        // println!("ADJACENT NODES {:?}", &incident_nodes);
         let adjacent_edges = incident_nodes
             .map(BlockedNode::from)
             .flat_map(|node| {
@@ -85,7 +81,6 @@ fn places_blocking<'mir, 'tcx>(
             .map(|edge| (edge, kind_set.clone()));
         to_visit.extend(adjacent_edges);
     }
-    // println!("blocking_places for {:?}: {:?}", &place, &places);
     places
 }
 
@@ -114,8 +109,9 @@ fn places_to_statements<'tcx>(
 
 pub struct BorrowExpiryOrder;
 
-impl PeepholeMutator for BorrowExpiryOrder {
+impl Mutation for BorrowExpiryOrder {
     fn generate_mutants<'mir, 'tcx>(
+        &self,
         ctx: CompilerCtxt<'mir, 'tcx>,
         body: &Body<'tcx>,
         curr: &PcgLocation<'tcx>,
@@ -236,19 +232,16 @@ impl PeepholeMutator for BorrowExpiryOrder {
             .collect()
     }
 
-    fn run_ratio(&mut self) -> (u32, u32) {
-        (1, 1)
-    }
-
-    fn name(&mut self) -> String {
+    fn name(&self) -> String {
         "borrow-expiry-order".into()
     }
 }
 
 pub struct AbstractExpiryOrder;
 
-impl PeepholeMutator for AbstractExpiryOrder {
+impl Mutation for AbstractExpiryOrder {
     fn generate_mutants<'mir, 'tcx>(
+        &self,
         ctx: CompilerCtxt<'mir, 'tcx>,
         body: &Body<'tcx>,
         curr: &PcgLocation<'tcx>,
@@ -374,11 +367,7 @@ impl PeepholeMutator for AbstractExpiryOrder {
             .collect()
     }
 
-    fn run_ratio(&mut self) -> (u32, u32) {
-        (1, 1)
-    }
-
-    fn name(&mut self) -> String {
+    fn name(&self) -> String {
         "abstract-expiry-order".into()
     }
 }
