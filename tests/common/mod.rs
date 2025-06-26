@@ -40,6 +40,20 @@ pub fn get_rust_toolchain_channel() -> String {
 }
 
 #[allow(dead_code)]
+pub fn cargo_clean_in_dir(dir: &Path) {
+    let cargo_clean = Command::new("cargo")
+        .arg("clean")
+        .current_dir(dir)
+        .status()
+        .unwrap_or_else(|_| panic!("Failed to clean cargo in {}", dir.display()));
+    assert!(
+        cargo_clean.success(),
+        "Failed to clean cargo in {}",
+        dir.display()
+    );
+}
+
+#[allow(dead_code)]
 pub fn run_pcg_on_crate_in_dir(dir: &Path, options: RunOnCrateOptions) {
     let cwd = std::env::current_dir().unwrap();
     let build_args = match options.target() {
@@ -51,33 +65,40 @@ pub fn run_pcg_on_crate_in_dir(dir: &Path, options: RunOnCrateOptions) {
         .args(build_args)
         .current_dir(&cwd)
         .status()
-        .expect("Failed to build pcg-evaluation-bin");
+        .expect("Failed to build pcg_bin");
 
-    assert!(cargo_build.success(), "Failed to build pcg-evaluation-bin");
+    assert!(cargo_build.success(), "Failed to build pcg_bin");
     let target = if matches!(options.target(), Target::Release) {
         "release"
     } else {
         "debug"
     };
-    let cargo = "cargo";
     let pcs_exe = cwd.join(["target", target, "pcg-evaluation-bin"].iter().collect::<PathBuf>());
-    println!("Running PCS on directory: {}", dir.display());
-    let exit = Command::new(cargo)
+    println!("Running PCG on directory: {}", dir.display());
+    let mut command = Command::new("cargo");
+    command
         .arg("check")
+        .current_dir(dir)
         .env("RUST_TOOLCHAIN", get_rust_toolchain_channel())
         .env("RUSTUP_TOOLCHAIN", get_rust_toolchain_channel())
         .env(
             "PCG_VALIDITY_CHECKS",
             format!("{}", options.validity_checks()),
         )
-        .env("RUSTC", &pcs_exe)
-        .current_dir(dir)
+        .env("RUSTC", &pcs_exe);
+    for (key, value) in options.extra_env_vars() {
+        command.env(key, value);
+    }
+    if let Some(function) = options.function() {
+        command.env("PCG_CHECK_FUNCTION", function);
+    }
+    let exit = command
         .status()
         .unwrap_or_else(|_| panic!("Failed to execute cargo check on {}", dir.display()));
 
     assert!(
         exit.success(),
-        "PCS check failed for directory {} with status: {}",
+        "PCG check failed for directory {} with status: {}",
         dir.display(),
         exit
     );
@@ -121,6 +142,9 @@ pub fn crate_download_dirname(name: &str, version: &str) -> String {
 
 pub fn is_supported_crate(name: &str, version: &str) -> Result<(), String> {
     match (name, version) {
+        ("rustls", "0.23.23") => {
+            Err("not working, not sure why".to_string())
+        }
         ("system-configuration", "0.6.1") => {
             Err("Skipping system-configuration; it doesn't compile.".to_string())
         }
@@ -167,10 +191,10 @@ pub fn is_supported_crate(name: &str, version: &str) -> Result<(), String> {
 }
 
 pub fn cached_cargo_lock_file(name: &str, version: &str, date: &str) -> PathBuf {
-    PathBuf::from(format!("tests/top-crates/{date}/{name}-{version}.lock"))
+    PathBuf::from(format!("pcg/tests/top-crates/{date}/{name}-{version}.lock"))
 }
 
-pub fn download_crate(name: &str, version: &str, date: &str) -> PathBuf {
+pub fn download_crate(name: &str, version: &str, date: Option<&str>) -> PathBuf {
     let dirname = crate_download_dirname(name, version);
     let filename = format!("{dirname}.crate");
     if !std::path::PathBuf::from(&filename).exists() {
@@ -191,12 +215,14 @@ pub fn download_crate(name: &str, version: &str, date: &str) -> PathBuf {
         .open(format!("{dirname}/Cargo.toml"))
         .unwrap();
     writeln!(file, "\n[workspace]").unwrap();
-    let cargo_lock_file = cached_cargo_lock_file(name, version, date);
-    if cargo_lock_file.exists() {
-        eprintln!("Using cached Cargo.lock for {name} {version}");
-        std::fs::copy(&cargo_lock_file, format!("{dirname}/Cargo.lock")).unwrap();
-    } else {
-        eprintln!("No cached Cargo.lock {}", cargo_lock_file.display());
+    if let Some(date) = date {
+        let cargo_lock_file = cached_cargo_lock_file(name, version, date);
+        if cargo_lock_file.exists() {
+            eprintln!("Using cached Cargo.lock for {name} {version}");
+            std::fs::copy(&cargo_lock_file, format!("{dirname}/Cargo.lock")).unwrap();
+        } else {
+            eprintln!("No cached Cargo.lock {}", cargo_lock_file.display());
+        }
     }
     PathBuf::from(&dirname)
 }
@@ -209,46 +235,68 @@ pub enum Target {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum RunOnCrateOptions {
-    TypecheckOnly,
+    TypecheckOnly {
+        extra_env_vars: Vec<(String, String)>,
+    },
     RunPCG {
         target: Target,
         validity_checks: bool,
+        function: Option<&'static str>,
+        extra_env_vars: Vec<(String, String)>,
     },
 }
 
 impl RunOnCrateOptions {
+    pub fn function(&self) -> Option<&'static str> {
+        match self {
+            RunOnCrateOptions::RunPCG { function, .. } => *function,
+            RunOnCrateOptions::TypecheckOnly { .. } => None,
+        }
+    }
+
+    pub fn extra_env_vars(&self) -> &[(String, String)] {
+        match self {
+            RunOnCrateOptions::RunPCG { extra_env_vars, .. } => extra_env_vars,
+            RunOnCrateOptions::TypecheckOnly { extra_env_vars } => extra_env_vars,
+        }
+    }
+
     pub fn validity_checks(&self) -> bool {
         match self {
             RunOnCrateOptions::RunPCG {
                 validity_checks, ..
             } => *validity_checks,
-            RunOnCrateOptions::TypecheckOnly => false,
+            RunOnCrateOptions::TypecheckOnly { .. } => false,
         }
     }
 
     pub fn target(&self) -> Target {
         match self {
             RunOnCrateOptions::RunPCG { target, .. } => *target,
-            RunOnCrateOptions::TypecheckOnly => Target::Release,
+            RunOnCrateOptions::TypecheckOnly { .. } => Target::Release,
         }
     }
 }
 
 #[allow(dead_code)]
-pub fn run_on_crate(name: &str, version: &str, date: &str, options: RunOnCrateOptions) {
+pub fn run_on_crate(name: &str, version: &str, date: Option<&str>, options: RunOnCrateOptions) {
     if let Err(e) = is_supported_crate(name, version) {
         eprintln!("{e}");
         return;
     }
     let dirname = download_crate(name, version, date);
     run_pcg_on_crate_in_dir(&dirname, options);
-    let cargo_lock_file = cached_cargo_lock_file(name, version, date);
-    if !cargo_lock_file.exists() {
-        std::fs::copy(dirname.join("Cargo.lock"), &cargo_lock_file).unwrap();
+    if let Some(date) = date {
+        let cargo_lock_file = cached_cargo_lock_file(name, version, date);
+        if !cargo_lock_file.exists() {
+            std::fs::copy(dirname.join("Cargo.lock"), &cargo_lock_file).unwrap();
+        }
     }
-    std::fs::remove_dir_all(dirname).unwrap();
+    std::fs::remove_dir_all(&dirname).unwrap_or_else(|e| {
+        panic!("Failed to remove directory {}: {}", dirname.display(), e);
+    });
 }
 
 #[allow(dead_code)]

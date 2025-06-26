@@ -17,6 +17,7 @@ rustversion = "1.0"
 chrono = "0.4.41"
 derive_more = "2.0.1"
 rustc_borrowck = { path = "rustc_borrowck", package = "rustc_borrowck" }
+rayon = "1.10.0"
 
 [package.metadata.rust-analyzer]
 # This crate uses #[feature(rustc_private)]

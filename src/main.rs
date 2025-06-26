@@ -150,7 +150,6 @@ fn run_mutation_tests<'tcx>(
                     instances: 0,
                     passed: 0,
                     failed: 0,
-                    panicked: 0,
                     error_codes: HashSet::new(),
                 });
             let body = &body_with_borrowck_facts.body;
@@ -163,7 +162,7 @@ fn run_mutation_tests<'tcx>(
                 mutator_data.instances += 1;
                 let do_borrowck = env_feature_enabled("DO_BORROWCK").unwrap_or(true);
                 // don't do this at home, kids
-                let maybe_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let borrow_check_info = if rand::random_ratio(numerator, denominator)
                         && do_borrowck
                     {
@@ -215,10 +214,6 @@ fn run_mutation_tests<'tcx>(
                     }
                     compiler.sess.dcx().reset_err_count(); // cursed
                 }));
-
-                if let Err(_) = maybe_panic {
-                    mutator_data.panicked += 1;
-                }
             }
         }
     }
@@ -233,6 +228,7 @@ fn run_mutation_tests<'tcx>(
     initialize_error_tracking();
 
     for def_id in tcx.hir().body_owners() {
+        println!("run mutation testing for {def_id:?}");
         let kind = tcx.def_kind(def_id);
         let item_name = tcx.def_path_str(def_id.to_def_id()).to_string();
         if !item_name.contains("de::deserialize_map") {

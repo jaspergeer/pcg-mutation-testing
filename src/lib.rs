@@ -32,6 +32,5 @@ pub struct MutatorData {
     pub instances: i64,
     pub passed: i64,
     pub failed: i64,
-    pub panicked: i64,
     pub error_codes: HashSet<String>,
 }
