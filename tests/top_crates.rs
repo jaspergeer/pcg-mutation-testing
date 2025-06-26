@@ -41,8 +41,8 @@ struct TopCratesResult {
 
 #[test]
 pub fn top_crates() {
-    let num_crates = std::env::var("PCG_NUM_TEST_CRATES").unwrap_or("10".to_string());
-    let parallelism = std::env::var("PCG_TEST_CRATE_PARALLELISM").unwrap_or("10".to_string());
+    let num_crates = std::env::var("PCG_NUM_TEST_CRATES").unwrap_or("250".to_string());
+    let parallelism = std::env::var("PCG_TEST_CRATE_PARALLELISM").unwrap_or("20".to_string());
     top_crates_parallel(
         num_crates.parse().unwrap(),
         Some("2025-03-13"),
