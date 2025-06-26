@@ -247,7 +247,7 @@ impl Crates {
             assert_eq!(
                 date,
                 today,
-                "Cannot get crates from {} because we JSON file {} doesn't exist",
+                "Cannot get crates from {} because the JSON file {} doesn't exist",
                 date,
                 cache_path.display()
             );

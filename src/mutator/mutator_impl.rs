@@ -11,13 +11,15 @@ use std::alloc::System;
 use std::iter::Iterator;
 use std::collections::VecDeque;
 
-#[derive(Serialize, Clone)]
+use tracing::info;
+
+#[derive(Serialize, Clone, Debug)]
 pub struct MutantLocation {
     pub basic_block: usize,
     pub statement_index: usize,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 pub struct MutantRange {
     pub start: MutantLocation,
     pub end: MutantLocation,
@@ -99,8 +101,9 @@ impl<'a, 'mir, 'tcx> Mutator<'a, 'mir, 'tcx>{
                 next = pcg_bb.statements.get(self.stmt_idx);
                 if let Some(curr) = curr && let Some(next) = next {
                     self.mutants = self.mutation.generate_mutants(self.ctx, self.body, curr, next).into();
+                } else {
+                    self.basic_blocks.pop_front();
                 }
-                self.basic_blocks.pop_front();
             }
         }
         self.mutants.pop_front()

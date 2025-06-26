@@ -5,17 +5,17 @@ fn test_selected_crates() {
     // Create tmp directory if it doesn't exist
     std::fs::create_dir_all("tmp").unwrap();
 
-    common::run_on_crate(
-        "wasm-bindgen-backend",
-        "0.2.100",
-        Some("2025-03-13"),
-        common::RunOnCrateOptions::RunPCG {
-            target: common::Target::Release,
-            validity_checks: true,
-            function: None,
-            extra_env_vars: vec![],
-        },
-    );
+    // common::run_on_crate(
+    //     "wasm-bindgen-backend",
+    //     "0.2.100",
+    //     Some("2025-03-13"),
+    //     common::RunOnCrateOptions::RunPCG {
+    //         target: common::Target::Release,
+    //         validity_checks: true,
+    //         function: None,
+    //         extra_env_vars: vec![],
+    //     },
+    // );
 
     // common::run_on_crate(
     //     "bindgen",
@@ -72,17 +72,17 @@ fn test_selected_crates() {
     //     },
     // );
 
-    // common::run_on_crate(
-    //     "pest",
-    //     "2.7.15",
-    //     Some("2025-03-13"),
-    //     common::RunOnCrateOptions::RunPCG {
-    //         target: common::Target::Debug,
-    //         validity_checks: true,
-    //         function: Some("parser_state::ParserState::<'i, R>::match_char_by"),
-    //         extra_env_vars: vec![],
-    //     },
-    // );
+    common::run_on_crate(
+        "pest",
+        "2.7.15",
+        Some("2025-03-13"),
+        common::RunOnCrateOptions::RunPCG {
+            target: common::Target::Debug,
+            validity_checks: true,
+            function: Some("parser_state::ParserState::<'i, R>::match_char_by"),
+            extra_env_vars: vec![],
+        },
+    );
 
     // common::run_on_crate(
     //     "linked-hash-map",

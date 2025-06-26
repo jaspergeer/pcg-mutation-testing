@@ -165,6 +165,12 @@ fn run_mutation_tests<'tcx>(
             let mut mutator = Mutator::new(mutation, ctx, &mut analysis, body);
 
             while let Some(Mutant { body, range, info }) = mutator.next() {
+                info!(
+                    "{}Mutation {} generated mutant at: {:?}",
+                    cargo_crate_name().map_or("".to_string(), |name| format!("{name}: ")),
+                    mutation.name(),
+                    range,
+                );
                 mutator_data.instances += 1;
                 let do_borrowck = env_feature_enabled("DO_BORROWCK").unwrap_or(true);
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -197,7 +203,8 @@ fn run_mutation_tests<'tcx>(
                             mutator_data.passed += 1;
                             if env_feature_enabled("PCG_VISUALIZATION").unwrap_or(false) {
                                 unsafe {
-                                    let body: pcg::rustc_interface::borrowck::BodyWithBorrowckFacts<'_> = std::mem::transmute(*mutant_body_with_borrowck_facts.unwrap());
+                                    let body: pcg::rustc_interface::borrowck::BodyWithBorrowckFacts<'_> =
+                                        std::mem::transmute(*mutant_body_with_borrowck_facts.unwrap());
                                     passed_bodies.insert(def_id, body.into());
                                 }
                             }
@@ -216,7 +223,7 @@ fn run_mutation_tests<'tcx>(
                     if env_feature_enabled("MUTANTS_LOG").unwrap_or(false) {
                         mutants_log.insert(mutants_log.len().to_string(), log_entry);
                     }
-                    compiler.sess.dcx().reset_err_count(); // cursed
+                    compiler.sess.dcx().reset_err_count();
                 }));
             }
         }
@@ -236,7 +243,7 @@ fn run_mutation_tests<'tcx>(
         if let Ok(function) = std::env::var("PCG_SKIP_FUNCTION")
             && function == item_name
         {
-            tracing::info!(
+            info!(
                 "Skipping function: {item_name} because PCG_SKIP_FUNCTION is set to {function}"
             );
             continue;
@@ -253,7 +260,7 @@ fn run_mutation_tests<'tcx>(
                             cargo_crate_name().map_or("".to_string(), |name| format!("{name}: ")),
                             item_name,
                         );
-                        tracing::info!("Path: {:?}", body.body.span);
+                        info!("Path: {:?}", body.body.span);
 
                         let safety = tcx.fn_sig(def_id).skip_binder().safety();
                         if safety == hir::Safety::Unsafe {
