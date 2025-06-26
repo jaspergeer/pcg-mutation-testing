@@ -4,8 +4,6 @@ mod common;
 use common::{get, run_on_crate};
 use common::{RunOnCrateOptions, Target};
 
-use std::fs::File;
-use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -17,21 +15,6 @@ use rayon::iter::ParallelIterator;
 
 use chrono::Local;
 use derive_more::Deref;
-
-#[test]
-pub fn test_crates() {
-    run_on_crate(
-        "arrayvec",
-        "0.7.6",
-        Some("2025-03-13"),
-        RunOnCrateOptions::RunPCG {
-            target: Target::Release,
-            validity_checks: false,
-            function: None,
-            extra_env_vars: vec![],
-        },
-    );
-}
 
 #[derive(Serialize)]
 struct TopCratesResult {

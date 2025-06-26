@@ -20,6 +20,7 @@ use pcg::free_pcs::PcgLocation;
 use pcg::pcg::EvalStmtPhase;
 use pcg::utils::CompilerCtxt;
 
+// WriteToShared creates mutants which write to shared borrows
 pub struct WriteToShared;
 
 impl Mutation for WriteToShared {
@@ -42,6 +43,8 @@ impl Mutation for WriteToShared {
             borrowed_places(borrows_graph, is_shared)
         };
 
+        // We consider only places lent at the PostMain of `curr` and PostOperands of `next`
+        // because borrows are killed only at the PostOperands phase.
         shared_in_next
             .filter(|(place, _)| shared_in_curr.contains(place))
             .filter(|(place, _)| has_named_local(*place, body))
@@ -67,8 +70,6 @@ impl Mutation for WriteToShared {
                 let bb = mutant_body.basic_blocks_mut().get_mut(bb_index)?;
                 bb.statements.insert(statement_index + 1, new_assign);
 
-                // TODO also emit mutant w/ immutable reference to place
-
                 let borrow_loc = MutantLocation {
                     basic_block: curr.location.block.index(),
                     statement_index: statement_index + 1,
@@ -85,7 +86,7 @@ impl Mutation for WriteToShared {
                         start: borrow_loc,
                         end: mention_loc,
                     },
-                    info: info,
+                    info,
                 })
             })
             .collect()

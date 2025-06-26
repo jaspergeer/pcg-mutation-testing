@@ -22,6 +22,7 @@ use pcg::pcg::EvalStmtPhase;
 use pcg::free_pcs::PcgLocation;
 use pcg::utils::CompilerCtxt;
 
+// MoveFromBorrowed creates mutants which move out of a place behind a mutable borrow
 pub struct MoveFromBorrowed;
 
 impl Mutation for MoveFromBorrowed {
@@ -46,6 +47,8 @@ impl Mutation for MoveFromBorrowed {
                 .collect::<HashSet<_>>()
         };
 
+        // We consider only places lent at the PostMain of `curr` and PostOperands of `next`
+        // because borrows are killed only at the PostOperands phase.
         lent_in_curr
             .iter()
             .filter(|place| lent_in_next.contains(place))
@@ -84,7 +87,7 @@ impl Mutation for MoveFromBorrowed {
                         start: borrow_loc.clone(),
                         end: borrow_loc,
                     },
-                    info: info,
+                    info,
                 })
             })
             .collect()

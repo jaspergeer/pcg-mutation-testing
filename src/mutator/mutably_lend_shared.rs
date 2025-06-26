@@ -24,6 +24,7 @@ use pcg::pcg::EvalStmtPhase;
 use pcg::free_pcs::PcgLocation;
 use pcg::utils::CompilerCtxt;
 
+// MutablyLendShared creates mutants which mutably borrow a place behind a shared borrow
 pub struct MutablyLendShared;
 
 impl Mutation for MutablyLendShared {
@@ -46,6 +47,8 @@ impl Mutation for MutablyLendShared {
                 .collect::<HashSet<_>>()
         };
 
+        // We consider only places lent at the PostMain of `curr` and PostOperands of `next`
+        // because borrows are killed only at the PostOperands phase.
         immutably_lent_in_curr
             .filter(|(place, _)| immutably_lent_in_next.contains(place))
             .filter(|(place, _)| has_named_local(*place, body))
@@ -90,7 +93,7 @@ impl Mutation for MutablyLendShared {
                         start: borrow_loc.clone(),
                         end: borrow_loc,
                     },
-                    info: info,
+                    info,
                 })
             })
             .collect()

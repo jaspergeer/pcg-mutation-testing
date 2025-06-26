@@ -91,6 +91,7 @@ pub(crate) fn is_shared(kind: BorrowKind) -> bool {
     }
 }
 
+// Returns every place blocked by a borrow edge satisfying `p`
 pub(crate) fn borrowed_places<'graph, 'tcx>(
     graph: &'graph BorrowsGraph<'tcx>,
     p: fn(BorrowKind) -> bool,

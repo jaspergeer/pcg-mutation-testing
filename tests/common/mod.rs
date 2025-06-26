@@ -65,15 +65,15 @@ pub fn run_pcg_on_crate_in_dir(dir: &Path, options: RunOnCrateOptions) {
         .args(build_args)
         .current_dir(&cwd)
         .status()
-        .expect("Failed to build pcg-evaluation-bin");
+        .expect("Failed to build mutation_testing_bin");
 
-    assert!(cargo_build.success(), "Failed to build pcg-evaluation-bin");
+    assert!(cargo_build.success(), "Failed to build mutation_testing_bin");
     let target = if matches!(options.target(), Target::Release) {
         "release"
     } else {
         "debug"
     };
-    let pcs_exe = cwd.join(["target", target, "pcg-evaluation-bin"].iter().collect::<PathBuf>());
+    let pcs_exe = cwd.join(["target", target, "mutation_testing_bin"].iter().collect::<PathBuf>());
     println!("Running PCG on directory: {}", dir.display());
     let mut command = Command::new("cargo");
     command
@@ -111,7 +111,7 @@ pub fn is_polonius_test_file(file: &Path) -> bool {
 #[allow(dead_code)]
 pub fn run_pcg_on_file(file: &Path) {
     let workspace_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
-    let pcs_exe = workspace_dir.join("target/debug/pcg-evaluation-bin");
+    let pcs_exe = workspace_dir.join("target/debug/mutation_testing_bin");
     println!("Running PCG on file: {}", file.display());
 
     let status = Command::new(&pcs_exe)

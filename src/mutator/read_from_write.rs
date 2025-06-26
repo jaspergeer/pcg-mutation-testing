@@ -21,6 +21,7 @@ use pcg::free_pcs::CapabilityKind;
 use pcg::free_pcs::PcgLocation;
 use pcg::utils::CompilerCtxt;
 
+// ReadFromWriteOnly creates mutants which read from places with W capability
 pub struct ReadFromWriteOnly;
 
 impl Mutation for ReadFromWriteOnly {
@@ -31,6 +32,9 @@ impl Mutation for ReadFromWriteOnly {
         curr: &PcgLocation<'tcx>,
         next: &PcgLocation<'tcx>,
     ) -> Vec<Mutant<'tcx>> {
+
+        // We consider only places that are W at the PostMain of `curr` and PostOperands of `next`
+        // because a borrow could expire which restores E capability at the PostOperands phase.
         let write_only_in_curr: Vec<_> =
             curr.states[EvalStmtPhase::PostMain]
             .capabilities()
@@ -96,7 +100,7 @@ impl Mutation for ReadFromWriteOnly {
                         start: borrow_loc.clone(),
                         end: borrow_loc,
                     },
-                    info: info,
+                    info,
                 })
             })
             .collect()

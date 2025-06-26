@@ -41,6 +41,9 @@ use pcg::borrow_pcg::edge::kind::BorrowPcgEdgeKind;
 use pcg::borrow_pcg::edge_data::EdgeData;
 use pcg::borrow_pcg::graph::BorrowsGraph;
 
+// Returns the places for each node that blocks `place` on a path that
+// includes at least one edge satisfying `is_blocking_edge` and consisting
+// only of edges that satisfy `is_valid_edge`
 fn places_blocking<'mir, 'tcx>(
     place: Place<'tcx>,
     borrows_graph: &BorrowsGraph<'tcx>,
@@ -107,6 +110,8 @@ fn places_to_statements<'tcx>(
         .collect()
 }
 
+// BorrowExpiryOrder identifies a place p1 which blocks another place p2 via a mutable
+// borrow and attempts to use p2 before p1.
 pub struct BorrowExpiryOrder;
 
 impl Mutation for BorrowExpiryOrder {
@@ -126,6 +131,7 @@ impl Mutation for BorrowExpiryOrder {
             .map(|(place, _)| (*place).into())
             .collect();
 
+        // Identify blocking places for each mutably borrowed place
         for place_ref in mutably_borrowed_places.iter() {
             let place = *place_ref;
             if has_named_local(place, body) {
@@ -154,7 +160,7 @@ impl Mutation for BorrowExpiryOrder {
                         let mutant_sequence = places_to_statements(
                             ctx.tcx(),
                             &mut mutant_body,
-                            vec![place, blocking_place],
+                            vec![place, blocking_place], // (p2, p1)
                         );
                         mutant_sequences.push((mutant_sequence, mutant_body));
                     }
@@ -162,6 +168,8 @@ impl Mutation for BorrowExpiryOrder {
             }
         }
 
+        // For each (p2, p1) create a branch of the program in which p2 is used
+        // before p1
         mutant_sequences
             .drain(..)
             .map(|(mutant_sequence, mut mutant_body)| {
@@ -237,6 +245,8 @@ impl Mutation for BorrowExpiryOrder {
     }
 }
 
+// AbstractExpiryOrder identifies a place p1 which blocks another place p2 via a mutable
+// borrow and through an abstraction edge and attempts to use p2 before p1
 pub struct AbstractExpiryOrder;
 
 impl Mutation for AbstractExpiryOrder {
@@ -256,6 +266,7 @@ impl Mutation for AbstractExpiryOrder {
             .map(|(place, _)| (*place).into())
             .collect();
 
+        // Identify blocking places for each mutably borrowed place
         for place_ref in mutably_borrowed_places.iter() {
             let place = *place_ref;
             if has_named_local(place, body) {
@@ -290,7 +301,7 @@ impl Mutation for AbstractExpiryOrder {
                         let mutant_sequence = places_to_statements(
                             ctx.tcx(),
                             &mut mutant_body,
-                            vec![place, blocking_place],
+                            vec![place, blocking_place], // (p2, p1)
                         );
                         mutant_sequences.push((mutant_sequence, mutant_body));
                     }
@@ -298,6 +309,8 @@ impl Mutation for AbstractExpiryOrder {
             }
         }
 
+        // For each (p2, p1) create a branch of the program in which p2 is used
+        // before p1
         mutant_sequences
             .drain(..)
             .map(|(mutant_sequence, mut mutant_body)| {

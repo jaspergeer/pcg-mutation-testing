@@ -1,13 +1,11 @@
 #![feature(rustc_private)]
 
-use pcg_evaluation::MutatorData;
+use pcg_mutation_testing::MutatorData;
 
-use std::fs::read_dir;
 use std::fs::File;
 
 use std::io;
 use std::io::BufReader;
-use std::io::Read;
 use std::io::Write;
 
 use serde_json::from_reader;
@@ -37,7 +35,7 @@ fn compile_results() -> io::Result<()> {
             let path = entry.path();
             if !path.is_dir() && !(*path.to_string_lossy()).ends_with("-mutants.json") {
                 let input_file = File::open(path)?;
-                let mut buf_reader = BufReader::new(input_file);
+                let buf_reader = BufReader::new(input_file);
                 if let Ok(mut file_results) = from_reader::<_, HashMap<String, MutatorData>>(buf_reader) {
                     for (mutator_name, result) in file_results.drain()  {
                         let entry = mutator_results

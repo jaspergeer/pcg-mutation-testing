@@ -1,21 +1,21 @@
 #![feature(rustc_private)]
 #![feature(let_chains)]
 
-use pcg_evaluation::MutatorData;
+use pcg_mutation_testing::MutatorData;
 
-use pcg_evaluation::mutator::Mutant;
-use pcg_evaluation::mutator::MutantRange;
-use pcg_evaluation::mutator::Mutator;
-use pcg_evaluation::mutator::Mutation;
+use pcg_mutation_testing::mutator::Mutant;
+use pcg_mutation_testing::mutator::MutantRange;
+use pcg_mutation_testing::mutator::Mutation;
+use pcg_mutation_testing::mutator::Mutator;
 
-use pcg_evaluation::mutator::expiry_order::AbstractExpiryOrder;
-use pcg_evaluation::mutator::expiry_order::BorrowExpiryOrder;
-use pcg_evaluation::mutator::move_from_borrowed::MoveFromBorrowed;
-use pcg_evaluation::mutator::mutably_lend_shared::MutablyLendShared;
-use pcg_evaluation::mutator::read_from_write::ReadFromWriteOnly;
-use pcg_evaluation::mutator::write_to_shared::WriteToShared;
+use pcg_mutation_testing::mutator::expiry_order::AbstractExpiryOrder;
+use pcg_mutation_testing::mutator::expiry_order::BorrowExpiryOrder;
+use pcg_mutation_testing::mutator::move_from_borrowed::MoveFromBorrowed;
+use pcg_mutation_testing::mutator::mutably_lend_shared::MutablyLendShared;
+use pcg_mutation_testing::mutator::read_from_write::ReadFromWriteOnly;
+use pcg_mutation_testing::mutator::write_to_shared::WriteToShared;
 
-use pcg_evaluation::utils::env_feature_enabled;
+use pcg_mutation_testing::utils::env_feature_enabled;
 
 use std::alloc::System;
 use std::cell::RefCell;
@@ -30,34 +30,34 @@ use indexmap::map::IndexMap;
 
 use serde::Serialize;
 
-use pcg_evaluation::rustc_interface::borrowck;
-use pcg_evaluation::rustc_interface::borrowck::consumers;
+use pcg_mutation_testing::rustc_interface::borrowck;
+use pcg_mutation_testing::rustc_interface::borrowck::consumers;
 
-use pcg_evaluation::rustc_interface::errors::fallback_fluent_bundle;
+use pcg_mutation_testing::rustc_interface::errors::fallback_fluent_bundle;
 
-use pcg_evaluation::rustc_interface::middle::query::queries::mir_borrowck::ProvidedValue;
-use pcg_evaluation::rustc_interface::middle::ty::TyCtxt;
-use pcg_evaluation::rustc_interface::middle::util::Providers;
+use pcg_mutation_testing::rustc_interface::middle::query::queries::mir_borrowck::ProvidedValue;
+use pcg_mutation_testing::rustc_interface::middle::ty::TyCtxt;
+use pcg_mutation_testing::rustc_interface::middle::util::Providers;
 
-use pcg_evaluation::rustc_interface::session::Session;
+use pcg_mutation_testing::rustc_interface::session::Session;
 
-use pcg_evaluation::rustc_interface::driver::Callbacks;
-use pcg_evaluation::rustc_interface::driver::DEFAULT_LOCALE_RESOURCES;
+use pcg_mutation_testing::rustc_interface::driver::Callbacks;
+use pcg_mutation_testing::rustc_interface::driver::DEFAULT_LOCALE_RESOURCES;
 
-use pcg_evaluation::errors::get_registered_errors;
-use pcg_evaluation::errors::initialize_error_tracking;
-use pcg_evaluation::errors::track_body_error_codes;
+use pcg_mutation_testing::errors::get_registered_errors;
+use pcg_mutation_testing::errors::initialize_error_tracking;
+use pcg_mutation_testing::errors::track_body_error_codes;
 
-use pcg_evaluation::rustc_interface::driver;
-use pcg_evaluation::rustc_interface::driver::Compilation;
+use pcg_mutation_testing::rustc_interface::driver;
+use pcg_mutation_testing::rustc_interface::driver::Compilation;
 
-use pcg_evaluation::rustc_interface::hir;
-use pcg_evaluation::rustc_interface::hir::def_id::LocalDefId;
+use pcg_mutation_testing::rustc_interface::hir;
+use pcg_mutation_testing::rustc_interface::hir::def_id::LocalDefId;
 
-use pcg_evaluation::rustc_interface::interface::interface::Compiler;
-use pcg_evaluation::rustc_interface::interface::Config;
+use pcg_mutation_testing::rustc_interface::interface::interface::Compiler;
+use pcg_mutation_testing::rustc_interface::interface::Config;
 
-use pcg_evaluation::rustc_interface::ast::Crate;
+use pcg_mutation_testing::rustc_interface::ast::Crate;
 
 use pcg::borrow_checker::r#impl::BorrowCheckerImpl;
 use pcg::pcg::BodyWithBorrowckFacts;
@@ -160,13 +160,13 @@ fn run_mutation_tests<'tcx>(
             let body = &body_with_borrowck_facts.body;
             let promoted = &body_with_borrowck_facts.promoted;
 
-            let mutation = unsafe { std::mem::transmute(&*mutation) };
-
+            // Weaken Box<dyn Mutation> + Send to dyn Mutation
+            let mutation: &Box<dyn Mutation> = unsafe { std::mem::transmute(&*mutation) };
             let mut mutator = Mutator::new(mutation, ctx, &mut analysis, body);
 
             while let Some(Mutant { body, range, info }) = mutator.next() {
                 info!(
-                    "{}Mutation {} generated mutant at: {:?}",
+                    "{}Mutation {} generated mutant at {:?}",
                     cargo_crate_name().map_or("".to_string(), |name| format!("{name}: ")),
                     mutation.name(),
                     range,
@@ -174,8 +174,7 @@ fn run_mutation_tests<'tcx>(
                 mutator_data.instances += 1;
                 let do_borrowck = env_feature_enabled("DO_BORROWCK").unwrap_or(true);
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let borrow_check_info = if do_borrowck
-                    {
+                    let borrow_check_info = if do_borrowck {
                         track_body_error_codes(def_id);
 
                         let (borrowck_result, mutant_body_with_borrowck_facts) = {
@@ -202,11 +201,16 @@ fn run_mutation_tests<'tcx>(
                         } else {
                             mutator_data.passed += 1;
                             if env_feature_enabled("PCG_VISUALIZATION").unwrap_or(false) {
-                                unsafe {
-                                    let body: pcg::rustc_interface::borrowck::BodyWithBorrowckFacts<'_> =
-                                        std::mem::transmute(*mutant_body_with_borrowck_facts.unwrap());
-                                    passed_bodies.insert(def_id, body.into());
-                                }
+                                // Because we have forked rustc_borrowck, there are two identical
+                                // definitions of the same data structure. Here we convert from the
+                                // version provided by rustc_private to the version defined in our
+                                // fork.
+                                let body: pcg::rustc_interface::borrowck::BodyWithBorrowckFacts<
+                                    '_,
+                                > = unsafe {
+                                    std::mem::transmute(*mutant_body_with_borrowck_facts.unwrap())
+                                };
+                                passed_bodies.insert(def_id, body.into());
                             }
                             BorrowCheckInfo::Passed
                         }
@@ -243,60 +247,48 @@ fn run_mutation_tests<'tcx>(
         if let Ok(function) = std::env::var("PCG_SKIP_FUNCTION")
             && function == item_name
         {
-            info!(
-                "Skipping function: {item_name} because PCG_SKIP_FUNCTION is set to {function}"
-            );
+            info!("Skipping function: {item_name} because PCG_SKIP_FUNCTION is set to {function}");
             continue;
         }
 
         let kind = tcx.def_kind(def_id);
         let item_name = tcx.def_path_str(def_id.to_def_id()).to_string();
-            match kind {
-                hir::def::DefKind::Fn | hir::def::DefKind::AssocFn => {
-                    if let Some(body) = body_map.get(&def_id) {
+        match kind {
+            hir::def::DefKind::Fn | hir::def::DefKind::AssocFn => {
+                if let Some(body) = body_map.get(&def_id) {
+                    info!(
+                        "{}Running mutation testing on function: {}",
+                        cargo_crate_name().map_or("".to_string(), |name| format!("{name}: ")),
+                        item_name,
+                    );
+                    info!("Path: {:?}", body.body.span);
 
-                        info!(
-                            "{}Running mutation testing on function: {}",
-                            cargo_crate_name().map_or("".to_string(), |name| format!("{name}: ")),
-                            item_name,
-                        );
-                        info!("Path: {:?}", body.body.span);
-
-                        let safety = tcx.fn_sig(def_id).skip_binder().safety();
-                        if safety == hir::Safety::Unsafe {
-                            continue;
-                        }
-                        std::env::set_var("PCG_VALIDITY_CHECKS", "false");
-
-                        let borrow_checker_impl = BorrowCheckerImpl::new(tcx, body);
-                        let ctx: CompilerCtxt<'_, '_> = CompilerCtxt::new(
-                            &body.body,
-                            tcx,
-                            &borrow_checker_impl,
-                        );
-                        let analysis = run_pcg(
-                            &body.body,
-                            ctx.tcx(),
-                            ctx.bc(),
-                            System,
-                            None,
-                        );
-
-                        run_mutation_tests_for_body(
-                            ctx,
-                            compiler,
-                            mutations,
-                            &mut mutants_log,
-                            &mut mutator_results,
-                            &mut passed_bodies,
-                            def_id,
-                            body,
-                            analysis,
-                        );
+                    let safety = tcx.fn_sig(def_id).skip_binder().safety();
+                    if safety == hir::Safety::Unsafe {
+                        continue;
                     }
+                    std::env::set_var("PCG_VALIDITY_CHECKS", "false");
+
+                    let borrow_checker_impl = BorrowCheckerImpl::new(tcx, body);
+                    let ctx: CompilerCtxt<'_, '_> =
+                        CompilerCtxt::new(&body.body, tcx, &borrow_checker_impl);
+                    let analysis = run_pcg(&body.body, ctx.tcx(), ctx.bc(), System, None);
+
+                    run_mutation_tests_for_body(
+                        ctx,
+                        compiler,
+                        mutations,
+                        &mut mutants_log,
+                        &mut mutator_results,
+                        &mut passed_bodies,
+                        def_id,
+                        body,
+                        analysis,
+                    );
                 }
-                _ => {}
             }
+            _ => {}
+        }
     }
 
     if let Some(crate_name) = cargo_crate_name() {

@@ -1,17 +1,15 @@
 use serde::Serialize;
 
-use crate::rustc_interface::middle::mir::Body;
 use crate::rustc_interface::middle::mir::BasicBlock;
+use crate::rustc_interface::middle::mir::Body;
 
 use pcg::free_pcs::PcgLocation;
 use pcg::utils::CompilerCtxt;
 use pcg::PcgOutput;
 
 use std::alloc::System;
-use std::iter::Iterator;
 use std::collections::VecDeque;
-
-use tracing::info;
+use std::iter::Iterator;
 
 #[derive(Serialize, Clone, Debug)]
 pub struct MutantLocation {
@@ -57,7 +55,7 @@ pub struct Mutator<'a, 'mir, 'tcx> {
     stmt_idx: usize,
 }
 
-impl<'a, 'mir, 'tcx> Mutator<'a, 'mir, 'tcx>{
+impl<'a, 'mir, 'tcx> Mutator<'a, 'mir, 'tcx> {
     pub fn new(
         mutation: &'a Box<dyn Mutation>,
         ctx: CompilerCtxt<'mir, 'tcx>,
@@ -86,12 +84,17 @@ impl<'a, 'mir, 'tcx> Mutator<'a, 'mir, 'tcx>{
         let mut next: Option<&PcgLocation<'_>>;
         let mut curr_bb: BasicBlock = *self.basic_blocks.front()?;
 
-        // Advance the cursor until we generate some mutants or finish traversing
+        // Seek until we generate some mutants or finish traversing
         // the MIR body
-        while !self.basic_blocks.is_empty()
-            && self.mutants.is_empty() {
-            // Advance until the next basic block for which we have an analysis
-            while self.analysis.get_all_for_bb(curr_bb).is_err() {
+        while !self.basic_blocks.is_empty() && self.mutants.is_empty() {
+            let old_num_bb = self.basic_blocks.len();
+            let old_stmt_idx = self.stmt_idx;
+            // Seek until the next basic block for which we have an analysis
+            let mut analysis;
+            while {
+                analysis = self.analysis.get_all_for_bb(curr_bb);
+                analysis.is_err() || analysis.unwrap().is_none()
+            } {
                 curr_bb = self.basic_blocks.pop_front()?;
                 self.stmt_idx = 0;
             }
@@ -99,12 +102,21 @@ impl<'a, 'mir, 'tcx> Mutator<'a, 'mir, 'tcx>{
                 curr = pcg_bb.statements.get(self.stmt_idx);
                 self.stmt_idx += 1;
                 next = pcg_bb.statements.get(self.stmt_idx);
-                if let Some(curr) = curr && let Some(next) = next {
-                    self.mutants = self.mutation.generate_mutants(self.ctx, self.body, curr, next).into();
+                if let Some(curr) = curr
+                    && let Some(next) = next
+                {
+                    self.mutants = self
+                        .mutation
+                        .generate_mutants(self.ctx, self.body, curr, next)
+                        .into();
                 } else {
-                    self.basic_blocks.pop_front();
+                    curr_bb = self.basic_blocks.pop_front()?;
                 }
+            } else {
+                unreachable!()
             }
+            // Sanity check for termination
+            assert!(self.basic_blocks.len() < old_num_bb || self.stmt_idx > old_stmt_idx);
         }
         self.mutants.pop_front()
     }

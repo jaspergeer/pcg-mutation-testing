@@ -1,5 +1,5 @@
 [package]
-name = "pcg-evaluation"
+name = "pcg-mutation-testing"
 version = "0.1.0"
 edition = "2021"
 
@@ -26,5 +26,5 @@ tracing-subscriber = "0.3.19"
 rustc_private = true
 
 [[bin]]
-name = "pcg-evaluation-bin"
+name = "mutation_testing_bin"
 path = "src/main.rs"

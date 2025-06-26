@@ -1,5 +1,3 @@
-
-pub mod block_mutable_borrow;
 pub mod expiry_order;
 pub mod move_from_borrowed;
 pub mod mutably_lend_shared;
