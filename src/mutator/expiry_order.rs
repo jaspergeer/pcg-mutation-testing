@@ -176,6 +176,7 @@ impl Mutation for BorrowExpiryOrder {
             .drain(..)
             .map(|(mutant_sequence, mut mutant_body)| {
                 let curr_bb_index = curr.location.block;
+                // Split the original basic block between `curr` and `next`
                 let bb = mutant_body
                     .basic_blocks_mut()
                     .get_mut(curr_bb_index)
@@ -196,6 +197,7 @@ impl Mutation for BorrowExpiryOrder {
 
                 let bogus_source_info = bogus_source_info(&mutant_body);
 
+                // `mutant_bb` is the branch in which we expire p2 before p1
                 let mutant_bb_index = fresh_basic_block(&mut mutant_body);
                 let mutant_bb = mutant_body
                     .basic_blocks_mut()
@@ -221,6 +223,10 @@ impl Mutation for BorrowExpiryOrder {
                     .basic_blocks_mut()
                     .get_mut(curr_bb_index)
                     .unwrap();
+
+                // Terminator of the original basic block becomes a false branch.
+                // Control will always flow to `tail_bb` but the compiler type-checks
+                // the body as if it could go to `mutant_bb`.
                 bb.terminator = Some(Terminator {
                     source_info: bogus_source_info,
                     kind: TerminatorKind::FalseEdge {
@@ -316,6 +322,7 @@ impl Mutation for AbstractExpiryOrder {
             .drain(..)
             .map(|(mutant_sequence, mut mutant_body)| {
                 let curr_bb_index = curr.location.block;
+                // Split the original basic block between `curr` and `next`
                 let bb = mutant_body
                     .basic_blocks_mut()
                     .get_mut(curr_bb_index)
@@ -336,6 +343,7 @@ impl Mutation for AbstractExpiryOrder {
 
                 let bogus_source_info = bogus_source_info(&mutant_body);
 
+                // `mutant_bb` is the branch in which we expire p2 before p1
                 let mutant_bb_index = fresh_basic_block(&mut mutant_body);
                 let mutant_bb = mutant_body
                     .basic_blocks_mut()
@@ -369,6 +377,9 @@ impl Mutation for AbstractExpiryOrder {
                     },
                 });
 
+                // Terminator of the original basic block becomes a false branch.
+                // Control will always flow to `tail_bb` but the compiler type-checks
+                // the body as if it could go to `mutant_bb`.
                 Mutant {
                     body: mutant_body,
                     range: MutantRange {

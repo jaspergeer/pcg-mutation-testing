@@ -31,9 +31,9 @@ pub struct Mutant<'tcx> {
     pub info: String,
 }
 
+// A `Mutation` uses a MIR `Body` and the analyses for two consecutive
+// statements to produce a set of mutant MIR `Body`s.
 pub trait Mutation {
-    // A `Mutation` uses a MIR `Body` and the analyses for two consecutive
-    // statements to produce a set of mutant MIR `Body`s.
     fn generate_mutants<'mir, 'tcx>(
         &self,
         ctx: CompilerCtxt<'mir, 'tcx>,

@@ -24,7 +24,7 @@ use pcg::pcg::EvalStmtPhase;
 use pcg::free_pcs::PcgLocation;
 use pcg::utils::CompilerCtxt;
 
-// MutablyLendShared creates mutants which mutably borrow a place behind a shared borrow
+// `MutablyLendShared` creates mutants which mutably borrow a place behind a shared borrow
 pub struct MutablyLendShared;
 
 impl Mutation for MutablyLendShared {
@@ -47,8 +47,8 @@ impl Mutation for MutablyLendShared {
                 .collect::<HashSet<_>>()
         };
 
-        // We consider only places lent at the PostMain of `curr` and PostOperands of `next`
-        // because borrows are killed only at the PostOperands phase.
+        // We consider only places lent at the `PostMain` of `curr` and `PostOperands` of `next`
+        // because borrows are killed only at the `PostOperands` phase.
         immutably_lent_in_curr
             .filter(|(place, _)| immutably_lent_in_next.contains(place))
             .filter(|(place, _)| has_named_local(*place, body))
@@ -69,6 +69,8 @@ impl Mutation for MutablyLendShared {
                 let default_mut_borrow = BorrowKind::Mut {
                     kind: MutBorrowKind::Default,
                 };
+
+                // Statement which mutably borrows `lent_place` into a `fresh_local`
                 let new_borrow = Statement {
                     source_info: statement_source_info,
                     kind: StatementKind::Assign(Box::new((
@@ -80,6 +82,8 @@ impl Mutation for MutablyLendShared {
                     "{:?} was shared, so inserted {:?}",
                     lent_place, &new_borrow
                 );
+
+                // Insert `new_borrow` between `curr` and `next`
                 bb.statements.insert(statement_index + 1, new_borrow);
 
                 let borrow_loc = MutantLocation {

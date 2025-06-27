@@ -22,7 +22,7 @@ use pcg::pcg::EvalStmtPhase;
 use pcg::free_pcs::PcgLocation;
 use pcg::utils::CompilerCtxt;
 
-// MoveFromBorrowed creates mutants which move out of a place behind a mutable borrow
+// `MoveFromBorrowed` creates mutants which move out of a place behind a mutable borrow
 pub struct MoveFromBorrowed;
 
 impl Mutation for MoveFromBorrowed {
@@ -47,8 +47,8 @@ impl Mutation for MoveFromBorrowed {
                 .collect::<HashSet<_>>()
         };
 
-        // We consider only places lent at the PostMain of `curr` and PostOperands of `next`
-        // because borrows are killed only at the PostOperands phase.
+        // We consider only places lent at the `PostMain` of `curr` and `PostOperands` of `next`
+        // because borrows are killed only at the `PostOperands` phase.
         lent_in_curr
             .iter()
             .filter(|place| lent_in_next.contains(place))
@@ -66,6 +66,7 @@ impl Mutation for MoveFromBorrowed {
                 let bb = mutant_body.basic_blocks_mut().get_mut(bb_index)?;
                 let statement_source_info = bb.statements.get(statement_index)?.source_info;
 
+                // Statement that moves `lent_place` into a `fresh_local`
                 let new_move = Statement {
                     source_info: statement_source_info,
                     kind: StatementKind::Assign(Box::new((
@@ -74,6 +75,7 @@ impl Mutation for MoveFromBorrowed {
                     ))),
                 };
                 let info = format!("{:?} was lent, so inserted {:?}", lent_place, &new_move);
+                // Insert `new_move` between `curr` and `next`
                 bb.statements.insert(statement_index + 1, new_move);
 
                 let borrow_loc = MutantLocation {
