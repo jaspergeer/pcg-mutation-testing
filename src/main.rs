@@ -95,8 +95,7 @@ struct LogEntry {
     info: String,
 }
 
-// Allows us to store compilation results and perform mutations on those
-// results from within a compiler session
+// Allows us to un our tool from within a compiler session
 struct MutatorCallbacks {
     mutations: Vec<Box<dyn Mutation + Send>>,
     results_dir: PathBuf,
