@@ -1,6 +1,8 @@
 #![feature(rustc_private)]
 #![feature(let_chains)]
 
+extern crate borrowck;
+
 use pcg_mutation_testing::MutatorData;
 
 use pcg_mutation_testing::mutator::Mutant;
@@ -30,7 +32,7 @@ use indexmap::map::IndexMap;
 
 use serde::Serialize;
 
-use pcg_mutation_testing::rustc_interface::borrowck;
+use pcg_mutation_testing::rustc_interface;
 use pcg_mutation_testing::rustc_interface::borrowck::consumers;
 
 use pcg_mutation_testing::rustc_interface::errors::fallback_fluent_bundle;
@@ -110,7 +112,7 @@ fn mir_borrowck<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> ProvidedValue<'t
         });
     }
     let mut providers = Providers::default();
-    borrowck::provide(&mut providers);
+    rustc_interface::borrowck::provide(&mut providers);
     let original_mir_borrowck = providers.mir_borrowck;
     original_mir_borrowck(tcx, def_id)
 }
@@ -178,8 +180,8 @@ fn run_mutation_tests<'tcx>(
                         track_body_error_codes(def_id);
 
                         let (borrowck_result, mutant_body_with_borrowck_facts) = {
-                            let consumer_opts = consumers::ConsumerOptions::PoloniusInputFacts;
-                            rustc_borrowck::do_mir_borrowck(
+                            let consumer_opts = borrowck::consumers::ConsumerOptions::PoloniusInputFacts;
+                            borrowck::do_mir_borrowck(
                                 ctx.tcx(),
                                 &body,
                                 &promoted,
