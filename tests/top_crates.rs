@@ -131,7 +131,7 @@ fn download_crates(n: usize) -> Vec<Crate> {
 }
 
 fn get_cache_path(date: &str) -> PathBuf {
-    PathBuf::from("pcg/tests/top-crates").join(format!("{date}.json"))
+    PathBuf::from("../pcg/tests/top-crates").join(format!("{date}.json"))
 }
 
 fn read_from_cache(cache_path: &Path) -> Option<Vec<Crate>> {

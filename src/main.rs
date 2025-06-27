@@ -309,12 +309,14 @@ fn run_mutation_tests<'tcx>(
             mutator_results_path = results_dir.join(unique_crate_name).with_extension("json");
         }
 
-        let mut mutants_log_file =
-            File::create(&mutants_log_path).expect(&format!("Failed to create output file {mutants_log_path:?}"));
-        let mutants_log_string = serde_json::to_string_pretty(&mutants_log).unwrap();
-        mutants_log_file
-            .write_all(mutants_log_string.as_bytes())
-            .expect("Failed to write results to file");
+        if env_feature_enabled("MUTANTS_LOG").unwrap_or(false) {
+            let mut mutants_log_file =
+                File::create(&mutants_log_path).expect(&format!("Failed to create output file {mutants_log_path:?}"));
+            let mutants_log_string = serde_json::to_string_pretty(&mutants_log).unwrap();
+            mutants_log_file
+                .write_all(mutants_log_string.as_bytes())
+                .expect("Failed to write results to file");
+        }
 
         let mut mutator_results_file =
             File::create(&mutator_results_path).expect(&format!("Failed to create output file {mutator_results_path:?}"));
