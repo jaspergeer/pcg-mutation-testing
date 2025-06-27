@@ -69,12 +69,14 @@ use pcg::PcgOutput;
 
 use tracing::info;
 
+// Thread-local map for storing intermediate compilation results that our tool will mutate
 thread_local! {
     pub static BODIES:
         RefCell<HashMap<LocalDefId, BodyWithBorrowckFacts<'static>>> =
         RefCell::new(HashMap::default());
 }
 
+// Information we record after running the borrow checker on a mutant
 #[derive(Serialize)]
 enum BorrowCheckInfo {
     NoRun,
@@ -82,6 +84,7 @@ enum BorrowCheckInfo {
     Failed { error_codes: HashSet<String> },
 }
 
+// Information we record about each mutant if `MUTANTS_LOG` is set
 #[derive(Serialize)]
 struct LogEntry {
     mutation_type: String,
@@ -91,9 +94,40 @@ struct LogEntry {
     info: String,
 }
 
+// Allows us to store compilation results and perform mutations on those
+// results from within a compiler session
 struct MutatorCallbacks {
     mutations: Vec<Box<dyn Mutation + Send>>,
     results_dir: PathBuf,
+}
+
+impl Callbacks for MutatorCallbacks {
+    fn config(&mut self, config: &mut Config) {
+        assert!(config.override_queries.is_none());
+        config.override_queries = Some(set_mir_borrowck);
+    }
+
+    fn after_crate_root_parsing<'tcx>(
+        &mut self,
+        compiler: &Compiler,
+        _crate: &Crate,
+    ) -> Compilation {
+        let fallback_bundle = fallback_fluent_bundle(DEFAULT_LOCALE_RESOURCES.to_vec(), false);
+        compiler
+            .sess
+            .dcx()
+            .make_silent(fallback_bundle, None, false);
+        Compilation::Continue
+    }
+
+    fn after_analysis(&mut self, compiler: &Compiler, tcx: TyCtxt<'_>) -> Compilation {
+        run_mutation_tests(tcx, compiler, &mut self.mutations, &self.results_dir);
+        if in_cargo_crate() {
+            Compilation::Continue
+        } else {
+            Compilation::Stop
+        }
+    }
 }
 
 fn mir_borrowck<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> ProvidedValue<'tcx> {
@@ -101,6 +135,7 @@ fn mir_borrowck<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> ProvidedValue<'t
         let consumer_opts = consumers::ConsumerOptions::PoloniusInputFacts;
         consumers::get_body_with_borrowck_facts(tcx, def_id, consumer_opts)
     };
+    // Store intermediate compilation results in our thread-local map
     unsafe {
         let body: pcg::rustc_interface::borrowck::BodyWithBorrowckFacts<'tcx> =
             std::mem::transmute(body_with_facts);
@@ -125,7 +160,8 @@ fn cargo_crate_name() -> Option<String> {
     std::env::var("CARGO_CRATE_NAME").ok()
 }
 
-// Run every Mutation on each MIR body
+// The main loop of our tool. Runs every `Mutation` in `Mutations` on each
+// MIR body in `BODIES`
 fn run_mutation_tests<'tcx>(
     tcx: TyCtxt<'tcx>,
     compiler: &Compiler,
@@ -138,7 +174,7 @@ fn run_mutation_tests<'tcx>(
         return;
     }
 
-    // Run every Mutation on a given MIR body
+    // Run every `Mutation` on a given MIR body
     fn run_mutation_tests_for_body<'mir, 'tcx>(
         ctx: CompilerCtxt<'mir, 'tcx>,
         compiler: &Compiler,
@@ -162,7 +198,7 @@ fn run_mutation_tests<'tcx>(
             let body = &body_with_borrowck_facts.body;
             let promoted = &body_with_borrowck_facts.promoted;
 
-            // Weaken &Box<dyn Mutation + Send> to &Box<dyn Mutation>
+            // Weaken `dyn Mutation + Send` to `dyn Mutation`
             let mutation: &Box<dyn Mutation> = unsafe { std::mem::transmute(&*mutation) };
             let mut mutator = Mutator::new(mutation, ctx, &mut analysis, body);
 
@@ -175,11 +211,15 @@ fn run_mutation_tests<'tcx>(
                 );
                 mutator_data.instances += 1;
                 let do_borrowck = env_feature_enabled("DO_BORROWCK").unwrap_or(true);
+
+                // It is possible that the compiler raises an ICE when borrow checking a mutant.
+                // In this case catch the unwind and do not count it as `Passed` or `Failed`
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let borrow_check_info = if do_borrowck {
                         track_body_error_codes(def_id);
 
                         let (borrowck_result, mutant_body_with_borrowck_facts) = {
+                            // Pass this mutant to the borrow checker
                             let consumer_opts = borrowck::consumers::ConsumerOptions::PoloniusInputFacts;
                             borrowck::do_mir_borrowck(
                                 ctx.tcx(),
@@ -203,10 +243,11 @@ fn run_mutation_tests<'tcx>(
                         } else {
                             mutator_data.passed += 1;
                             if env_feature_enabled("PCG_VISUALIZATION").unwrap_or(false) {
-                                // Because we have forked rustc_borrowck, there are two identical
-                                // definitions of the same data structure. Here we convert from the
-                                // version provided by rustc_private to the version defined in our
-                                // fork.
+
+                                // Because we have forked `rustc_borrowck`, there are two identical
+                                // definitions of `BodyWithBorrowckFacts`. Here we convert from the
+                                // version provided by `rustc_private` to the version defined in our
+                                // fork `borrowck`.
                                 let body: pcg::rustc_interface::borrowck::BodyWithBorrowckFacts<
                                     '_,
                                 > = unsafe {
@@ -244,6 +285,7 @@ fn run_mutation_tests<'tcx>(
 
     initialize_error_tracking();
 
+    // Mutation test each body in the crate
     for def_id in tcx.hir().body_owners() {
         let item_name = tcx.def_path_str(def_id.to_def_id()).to_string();
         if let Ok(function) = std::env::var("PCG_SKIP_FUNCTION")
@@ -324,35 +366,6 @@ fn run_mutation_tests<'tcx>(
         mutator_results_file
             .write_all(mutator_results_string.as_bytes())
             .expect("Failed to write results to file");
-    }
-}
-
-impl Callbacks for MutatorCallbacks {
-    fn config(&mut self, config: &mut Config) {
-        assert!(config.override_queries.is_none());
-        config.override_queries = Some(set_mir_borrowck);
-    }
-
-    fn after_crate_root_parsing<'tcx>(
-        &mut self,
-        compiler: &Compiler,
-        _crate: &Crate,
-    ) -> Compilation {
-        let fallback_bundle = fallback_fluent_bundle(DEFAULT_LOCALE_RESOURCES.to_vec(), false);
-        compiler
-            .sess
-            .dcx()
-            .make_silent(fallback_bundle, None, false);
-        Compilation::Continue
-    }
-
-    fn after_analysis(&mut self, compiler: &Compiler, tcx: TyCtxt<'_>) -> Compilation {
-        run_mutation_tests(tcx, compiler, &mut self.mutations, &self.results_dir);
-        if in_cargo_crate() {
-            Compilation::Continue
-        } else {
-            Compilation::Stop
-        }
     }
 }
 

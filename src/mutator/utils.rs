@@ -44,6 +44,7 @@ pub(crate) fn maybe_old_place_to_current_place<'tcx>(maybe_old_place: MaybeOldPl
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn maybe_remote_place_to_local_place<'tcx>(maybe_remote_place: MaybeRemotePlace<'tcx>) -> Option<MaybeOldPlace<'tcx>>{
     match maybe_remote_place {
         MaybeRemotePlace::Local(maybe_old_place) =>
