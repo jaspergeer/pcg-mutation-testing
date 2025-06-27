@@ -191,7 +191,7 @@ pub fn is_supported_crate(name: &str, version: &str) -> Result<(), String> {
 }
 
 pub fn cached_cargo_lock_file(name: &str, version: &str, date: &str) -> PathBuf {
-    PathBuf::from(format!("pcg/tests/top-crates/{date}/{name}-{version}.lock"))
+    PathBuf::from(format!("../pcg/tests/top-crates/{date}/{name}-{version}.lock"))
 }
 
 pub fn download_crate(name: &str, version: &str, date: Option<&str>) -> PathBuf {
