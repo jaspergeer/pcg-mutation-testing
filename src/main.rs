@@ -308,14 +308,14 @@ fn run_mutation_tests<'tcx>(
         }
 
         let mut mutants_log_file =
-            File::create(&mutants_log_path).expect("Failed to create output file");
+            File::create(&mutants_log_path).expect(&format!("Failed to create output file {mutants_log_path:?}"));
         let mutants_log_string = serde_json::to_string_pretty(&mutants_log).unwrap();
         mutants_log_file
             .write_all(mutants_log_string.as_bytes())
             .expect("Failed to write results to file");
 
         let mut mutator_results_file =
-            File::create(&mutator_results_path).expect("Failed to create output file");
+            File::create(&mutator_results_path).expect(&format!("Failed to create output file {mutator_results_path:?}"));
         let mutator_results_string = serde_json::to_string_pretty(&mutator_results).unwrap();
         mutator_results_file
             .write_all(mutator_results_string.as_bytes())
@@ -378,10 +378,12 @@ fn main() {
 
     rustc_args.extend(std::env::args().skip(1));
 
-    let results_dir = match std::env::var("RESULTS_DIR") {
+    let results_dir: PathBuf = match std::env::var("RESULTS_DIR") {
         Ok(str) => str.into(),
-        _ => std::env::current_dir().unwrap(),
+        _ => "/dev/null".into(),
     };
+
+    assert!(Path::exists(Path::new(&results_dir)), "Results directory {results_dir:?} does not exist");
 
     let mut callbacks = MutatorCallbacks {
         mutations: vec![

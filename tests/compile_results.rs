@@ -17,9 +17,9 @@ use std::path::Path;
 
 #[test]
 fn compile_results() -> io::Result<()> {
-    let results_dir = match std::env::var("RESULTS_DIR") {
+    let results_dir: String = match std::env::var("RESULTS_DIR") {
         Ok(str) => str.into(),
-        _ => std::env::current_dir().unwrap(),
+        _ => "data".into(),
     };
 
     let path = Path::new(&results_dir).join("mutation-testing-results.json");
