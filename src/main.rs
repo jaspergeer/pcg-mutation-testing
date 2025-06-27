@@ -384,7 +384,7 @@ fn main() {
 
     let results_dir: PathBuf = match std::env::var("RESULTS_DIR") {
         Ok(str) => str.into(),
-        _ => "/dev/null".into(),
+        _ => std::env::current_dir().unwrap(),
     };
 
     assert!(Path::exists(Path::new(&results_dir)), "Results directory {results_dir:?} does not exist");
