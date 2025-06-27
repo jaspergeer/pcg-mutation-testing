@@ -20,8 +20,6 @@
 extern crate polonius_engine;
 extern crate either;
 extern crate smallvec;
-extern crate itertools;
-extern crate tracing;
 
 extern crate rustc_abi;
 extern crate rustc_data_structures;
