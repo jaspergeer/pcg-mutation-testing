@@ -2,7 +2,7 @@
 
 echo $SMALLVEC_PATH
 
-case "$arch" in
+case "$(uname -m)" in
   x86_64)
     cargo build
     ;;
