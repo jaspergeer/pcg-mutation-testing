@@ -1,3 +1,11 @@
 #!/usr/bin/env bash
 
-RUSTFLAGS="--extern borrowck=../borrowck/target/debug/libborrowck.rlib" cargo build
+case "$(uname -m)" in
+  x86_64)
+    cargo build
+    ;;
+  *)
+    echo "Mutation testing is only supported on x86"
+    exit 1
+    ;;
+esac
