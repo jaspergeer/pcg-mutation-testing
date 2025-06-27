@@ -6,6 +6,6 @@ case "$(uname -m)" in
     ;;
   *)
     echo "Mutation testing is only supported on x86"
-    exit 1
+    exit 0
     ;;
 esac
