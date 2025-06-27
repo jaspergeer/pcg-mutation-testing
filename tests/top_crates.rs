@@ -34,10 +34,6 @@ pub fn top_crates() {
 }
 
 pub fn top_crates_parallel(n: usize, date: Option<&str>, parallelism: usize) {
-    let stats = Arc::new(Mutex::new(TopCratesResult {
-        succeeded: vec![],
-        failed: vec![],
-    }));
     std::fs::create_dir_all("tmp").unwrap();
     rayon::ThreadPoolBuilder::new()
         .num_threads(parallelism)
@@ -46,9 +42,9 @@ pub fn top_crates_parallel(n: usize, date: Option<&str>, parallelism: usize) {
     let top_crates: Vec<_> = Crates::top(n, date).to_vec();
 
     // TODO: Fix the slowness
-    // let mut extra_env_vars = vec![
-    //     ("PCG_SKIP_FUNCTION".to_string(), "<ir::comp::CompInfo as codegen::CodeGenerator>::codegen".to_string()),
-    // ];
+    let mut extra_env_vars = vec![
+        ("PCG_SKIP_FUNCTION".to_string(), "<ir::comp::CompInfo as codegen::CodeGenerator>::codegen".to_string()),
+    ];
 
     top_crates
         .into_par_iter()
@@ -72,80 +68,9 @@ pub fn top_crates_parallel(n: usize, date: Option<&str>, parallelism: usize) {
                     extra_env_vars: vec![],
                 },
             );
-            let mut stats = stats.lock().unwrap();
-            stats.succeeded.push(krate.name.clone());
             println!("Finished: {i} ({})", krate.name);
         });
-
-        // let path = {
-        //     let results_dir = str.to_string();
-        //     Path::new(&results_dir).join("top-crates-results.txt")
-        // };
-        // let mut output_file = File::create(&path).unwrap();
-
-        // let stats_string = serde_json::to_string_pretty(&stats.into_inner().unwrap()).unwrap();
-        // output_file
-        //     .write_all(stats_string.as_bytes())
-        //     .expect("Failed to write results to file");
 }
-
-// pub fn top_crates_range(range: usize, date: &str) {
-//     let mut stats = TopCratesResult { succeeded: vec![], failed: vec![] };
-//     if let Ok(str) = std::env::var("RESULTS_DIR") {
-//         std::fs::create_dir_all("tmp").unwrap();
-//         let mut top_crates: Vec<_> = Crates::top(range, Some(date)).to_vec();
-//         let mut thunks: Vec<_> = top_crates
-//             .drain(..)
-//             .map(|krate| {
-//                 let results_dir = str.to_string();
-//                 let version = krate.version.unwrap_or(krate.newest_version);
-//                 let date_string = date.to_string();
-//                 (krate.name.clone(),
-//                  || {
-//                     std::thread::spawn(move || {
-//                         std::env::set_var("RESULTS_DIR", results_dir);
-//                         run_on_crate(&krate.name, &version, Some(date_string.as_str()),
-//                                      RunOnCrateOptions::RunPCG {
-//                                          target: Target::Release,
-//                                          validity_checks: false,
-//                                      });
-//                     })
-//                  })
-//             }).collect();
-
-//         let mut handles: Vec<_> = vec![];
-
-//         while !thunks.is_empty() || !handles.is_empty() {
-//             if handles.len() < MAX_CONCURRENT_THREADS {
-//                 if let Some((name, thunk)) = thunks.pop() {
-//                     handles.push((name, thunk()))
-//                 }
-//             }
-//             for i in 0..handles.len() {
-//                 if let Some((_, handle)) = handles.get_mut(i) {
-//                     if handle.is_finished() {
-//                         let (name, handle) = handles.remove(i);
-//                         match handle.join() {
-//                             Err(_) => stats.failed.push(name.clone()),
-//                             _ => stats.succeeded.push(name)
-//                         }
-//                     }
-//                 }
-//             }
-//         }
-
-//         let path = {
-//             let results_dir = str.to_string();
-//             Path::new(&results_dir).join("top-crates-results.txt")
-//         };
-//         let mut output_file = File::create(&path).unwrap();
-
-//         let stats_string = serde_json::to_string_pretty(&stats).unwrap();
-//         output_file
-//             .write_all(stats_string.as_bytes())
-//             .expect("Failed to write results to file");
-//     }
-// }
 
 /// A create on crates.io.
 #[derive(Debug, Deserialize, Serialize, Clone)]

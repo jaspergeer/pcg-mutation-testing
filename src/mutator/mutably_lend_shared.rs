@@ -77,7 +77,7 @@ impl Mutation for MutablyLendShared {
                     ))),
                 };
                 let info = format!(
-                    "{:?} was immutably lent, so inserted {:?}",
+                    "{:?} was shared, so inserted {:?}",
                     lent_place, &new_borrow
                 );
                 bb.statements.insert(statement_index + 1, new_borrow);

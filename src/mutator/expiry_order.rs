@@ -199,7 +199,7 @@ impl Mutation for BorrowExpiryOrder {
                     .basic_blocks_mut()
                     .get_mut(mutant_bb_index)
                     .unwrap();
-                mutant_bb.statements = mutant_sequence;
+                mutant_bb.statements = mutant_sequence.clone();
                 mutant_bb.terminator = Some(Terminator {
                     source_info: bogus_source_info,
                     kind: TerminatorKind::Unreachable,
@@ -233,8 +233,7 @@ impl Mutation for BorrowExpiryOrder {
                         start: start_loc,
                         end: end_loc,
                     },
-                    // info: format!("mutant sequence: {:?}", &mutant_sequence).to_string(),
-                    info: format!("created new basic block {:?}", mutant_bb_index).to_string(),
+                    info: format!("created mutant expiry sequence {:?}", mutant_sequence).to_string(),
                 }
             })
             .collect()
@@ -340,7 +339,7 @@ impl Mutation for AbstractExpiryOrder {
                     .basic_blocks_mut()
                     .get_mut(mutant_bb_index)
                     .unwrap();
-                mutant_bb.statements = mutant_sequence;
+                mutant_bb.statements = mutant_sequence.clone();
                 mutant_bb.terminator = Some(Terminator {
                     source_info: bogus_source_info,
                     kind: TerminatorKind::Unreachable,
@@ -374,7 +373,7 @@ impl Mutation for AbstractExpiryOrder {
                         start: start_loc,
                         end: end_loc,
                     },
-                    info: format!("created new basic block {:?}", mutant_bb_index).to_string(),
+                    info: format!("created mutant expiry sequence {:?}", mutant_sequence).to_string(),
                 }
             })
             .collect()

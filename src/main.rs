@@ -160,7 +160,7 @@ fn run_mutation_tests<'tcx>(
             let body = &body_with_borrowck_facts.body;
             let promoted = &body_with_borrowck_facts.promoted;
 
-            // Weaken Box<dyn Mutation> + Send to dyn Mutation
+            // Weaken &Box<dyn Mutation + Send> to &Box<dyn Mutation>
             let mutation: &Box<dyn Mutation> = unsafe { std::mem::transmute(&*mutation) };
             let mut mutator = Mutator::new(mutation, ctx, &mut analysis, body);
 
