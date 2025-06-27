@@ -23,15 +23,17 @@ pub struct MutantRange {
     pub end: MutantLocation,
 }
 
+// A Mutant is a MIR body along with a description of the mutation performed
+// and a source range describing where the mutation appears
 pub struct Mutant<'tcx> {
     pub body: Body<'tcx>,
     pub range: MutantRange,
     pub info: String,
 }
 
-// A Mutation uses a MIR body and the analyses for two consecutive
-// statements to produce a set of mutant MIR bodies.
 pub trait Mutation {
+    // A Mutation uses a MIR body and the analyses for two consecutive
+    // statements to produce a set of mutant MIR bodies.
     fn generate_mutants<'mir, 'tcx>(
         &self,
         ctx: CompilerCtxt<'mir, 'tcx>,

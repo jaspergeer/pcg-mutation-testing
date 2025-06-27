@@ -87,6 +87,8 @@ fn places_blocking<'mir, 'tcx>(
     places
 }
 
+// Given a list of MIR places, produce a list of MIR statements which reborrow those places
+// into fresh local variables in the same order
 fn places_to_statements<'tcx>(
     tcx: TyCtxt<'tcx>,
     body: &mut Body<'tcx>,
@@ -111,7 +113,7 @@ fn places_to_statements<'tcx>(
 }
 
 // BorrowExpiryOrder identifies a place p1 which blocks another place p2 via a mutable
-// borrow and attempts to use p2 before p1.
+// borrow and attempts to use p2 before p1
 pub struct BorrowExpiryOrder;
 
 impl Mutation for BorrowExpiryOrder {
