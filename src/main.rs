@@ -76,7 +76,7 @@ thread_local! {
         RefCell::new(HashMap::default());
 }
 
-// Information we record after running the borrow checker on a mutant
+// Indicates the result of running the borrow checker on a mutant
 #[derive(Serialize)]
 enum BorrowCheckInfo {
     NoRun,
@@ -89,6 +89,7 @@ enum BorrowCheckInfo {
 struct LogEntry {
     mutation_type: String,
     borrow_check_info: BorrowCheckInfo,
+    // ID of the MIR definition that this mutant was created from
     definition: String,
     range: MutantRange,
     info: String,

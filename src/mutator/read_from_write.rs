@@ -76,6 +76,7 @@ impl Mutation for ReadFromWriteOnly {
                 let bb = mutant_body.basic_blocks_mut().get_mut(bb_index)?;
                 let statement_source_info = bb.statements.get(statement_index)?.source_info;
 
+                // Statment that reads `place` into a `fresh_local`
                 let new_read = Statement {
                     source_info: statement_source_info,
                     kind: StatementKind::FakeRead(Box::new((
@@ -87,6 +88,7 @@ impl Mutation for ReadFromWriteOnly {
                     "{:?} was write-only, so inserted {:?}",
                     lent_place, &new_read
                 );
+                // Insert `new_read` between `curr` and `next`
                 bb.statements.insert(statement_index + 1, new_read);
 
                 let borrow_loc = MutantLocation {

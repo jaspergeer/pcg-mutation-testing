@@ -23,7 +23,7 @@ pub struct MutantRange {
     pub end: MutantLocation,
 }
 
-// A Mutant is a MIR body along with a description of the mutation performed
+// A `Mutant` is a MIR `Body` along with a description of the mutation performed
 // and a source range describing where the mutation appears
 pub struct Mutant<'tcx> {
     pub body: Body<'tcx>,
@@ -32,8 +32,8 @@ pub struct Mutant<'tcx> {
 }
 
 pub trait Mutation {
-    // A Mutation uses a MIR body and the analyses for two consecutive
-    // statements to produce a set of mutant MIR bodies.
+    // A `Mutation` uses a MIR `Body` and the analyses for two consecutive
+    // statements to produce a set of mutant MIR `Body`s.
     fn generate_mutants<'mir, 'tcx>(
         &self,
         ctx: CompilerCtxt<'mir, 'tcx>,
@@ -44,9 +44,9 @@ pub trait Mutation {
     fn name(&self) -> String;
 }
 
-// A Mutator is instantiated with a Mutation, a MIR body, and a corresponding
-// PCG analysis. It can be repeatedly queried for new mutants until it has finished
-// traversing the entire MIR body.
+// A `Mutator` generates mutants for a MIR `Body` using a `Mutation`.
+// It can be repeatedly queried for new mutants until it has finished traversing
+// the entire `Body`.
 pub struct Mutator<'a, 'mir, 'tcx> {
     mutation: &'a Box<dyn Mutation>,
     ctx: CompilerCtxt<'mir, 'tcx>,
@@ -80,14 +80,14 @@ impl<'a, 'mir, 'tcx> Mutator<'a, 'mir, 'tcx> {
         self.mutation.name()
     }
 
-    // Return the next mutant that can be generated from this body
+    // Return the next `Mutant` that can be generated from this body
     pub fn next(&mut self) -> Option<Mutant<'tcx>> {
         let mut curr: Option<&PcgLocation<'_>>;
         let mut next: Option<&PcgLocation<'_>>;
         let mut curr_bb: BasicBlock = *self.basic_blocks.front()?;
 
-        // Seek until we generate some mutants or finish traversing
-        // the MIR body
+        // Seek until we generate some `Mutant`s or finish traversing
+        // the body
         while !self.basic_blocks.is_empty() && self.mutants.is_empty() {
             let old_num_bb = self.basic_blocks.len();
             let old_stmt_idx = self.stmt_idx;
