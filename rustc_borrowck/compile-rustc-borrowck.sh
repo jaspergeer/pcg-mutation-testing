@@ -5,6 +5,8 @@ echo $SMALLVEC_PATH
 case "$(uname -m)" in
   x86_64)
     SMALLVEC_PATH=$(find "$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | grep 'host:' | awk '{print $2}')/lib" -name 'libsmallvec*.rmeta')
+    echo $SMALLVEC_PATH
+    exit 1
     RUSTFLAGS="--extern smallvec=$SMALLVEC_PATH" cargo build
     ;;
   aarch64)
