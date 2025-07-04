@@ -43,6 +43,7 @@ fn compile_results() -> io::Result<()> {
                               instances: 0,
                               passed: 0,
                               failed: 0,
+                              panicked: 0,
                               error_codes: HashSet::new(),
                           });
                         entry.instances += result.instances;

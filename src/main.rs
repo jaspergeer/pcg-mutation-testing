@@ -193,6 +193,7 @@ fn run_mutation_tests<'tcx>(
                     instances: 0,
                     passed: 0,
                     failed: 0,
+                    panicked: 0,
                     error_codes: HashSet::new(),
                 });
             let body = &body_with_borrowck_facts.body;
@@ -214,7 +215,7 @@ fn run_mutation_tests<'tcx>(
 
                 // It is possible that the compiler raises an ICE when borrow checking a mutant.
                 // In this case catch the unwind and do not count it as `Passed` or `Failed`
-                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let maybe_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let borrow_check_info = if do_borrowck {
                         track_body_error_codes(def_id);
 
@@ -272,6 +273,10 @@ fn run_mutation_tests<'tcx>(
                     }
                     compiler.sess.dcx().reset_err_count();
                 }));
+
+                if let Err(_) = maybe_panic {
+                   mutator_data.panicked += 1
+                }
             }
         }
     }
@@ -404,11 +409,11 @@ fn main() {
 
     let mut callbacks = MutatorCallbacks {
         mutations: vec![
-            // Box::new(BorrowExpiryOrder),
-            // Box::new(AbstractExpiryOrder),
-            // Box::new(MutablyLendShared),
-            // Box::new(ReadFromWriteOnly),
-            // Box::new(WriteToShared),
+            Box::new(BorrowExpiryOrder),
+            Box::new(AbstractExpiryOrder),
+            Box::new(MutablyLendShared),
+            Box::new(ReadFromWriteOnly),
+            Box::new(WriteToShared),
             Box::new(MoveFromBorrowed),
         ],
         results_dir,
