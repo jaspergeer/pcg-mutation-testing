@@ -404,11 +404,11 @@ fn main() {
 
     let mut callbacks = MutatorCallbacks {
         mutations: vec![
-            Box::new(BorrowExpiryOrder),
-            Box::new(AbstractExpiryOrder),
-            Box::new(MutablyLendShared),
-            Box::new(ReadFromWriteOnly),
-            Box::new(WriteToShared),
+            // Box::new(BorrowExpiryOrder),
+            // Box::new(AbstractExpiryOrder),
+            // Box::new(MutablyLendShared),
+            // Box::new(ReadFromWriteOnly),
+            // Box::new(WriteToShared),
             Box::new(MoveFromBorrowed),
         ],
         results_dir,

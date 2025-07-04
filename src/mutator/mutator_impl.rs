@@ -80,11 +80,14 @@ impl<'a, 'mir, 'tcx> Mutator<'a, 'mir, 'tcx> {
         self.mutation.name()
     }
 
+    fn curr_bb(&self) -> Option<BasicBlock> {
+        Some(*self.basic_blocks.front()?)
+    }
+
     // Return the next `Mutant` that can be generated from this body
     pub fn next(&mut self) -> Option<Mutant<'tcx>> {
         let mut curr: Option<&PcgLocation<'_>>;
         let mut next: Option<&PcgLocation<'_>>;
-        let mut curr_bb: BasicBlock = *self.basic_blocks.front()?;
 
         // Seek until we generate some `Mutant`s or finish traversing
         // the body
@@ -94,13 +97,13 @@ impl<'a, 'mir, 'tcx> Mutator<'a, 'mir, 'tcx> {
             // Seek until the next basic block for which we have an analysis
             let mut analysis;
             while {
-                analysis = self.analysis.get_all_for_bb(curr_bb);
+                analysis = self.analysis.get_all_for_bb(self.curr_bb()?);
                 analysis.is_err() || analysis.unwrap().is_none()
             } {
-                curr_bb = self.basic_blocks.pop_front()?;
+                self.basic_blocks.pop_front();
                 self.stmt_idx = 0;
             }
-            if let Ok(Some(pcg_bb)) = self.analysis.get_all_for_bb(curr_bb) {
+            if let Ok(Some(pcg_bb)) = self.analysis.get_all_for_bb(self.curr_bb()?) {
                 curr = pcg_bb.statements.get(self.stmt_idx);
                 self.stmt_idx += 1;
                 next = pcg_bb.statements.get(self.stmt_idx);
@@ -112,10 +115,8 @@ impl<'a, 'mir, 'tcx> Mutator<'a, 'mir, 'tcx> {
                         .generate_mutants(self.ctx, self.body, curr, next)
                         .into();
                 } else {
-                    curr_bb = self.basic_blocks.pop_front()?;
+                    self.basic_blocks.pop_front();
                 }
-            } else {
-                unreachable!()
             }
             // Sanity check for termination
             assert!(self.basic_blocks.len() < old_num_bb || self.stmt_idx > old_stmt_idx);

@@ -5,17 +5,17 @@ fn test_selected_crates() {
     // Create tmp directory if it doesn't exist
     std::fs::create_dir_all("tmp").unwrap();
 
-    common::run_on_crate(
-        "hashbrown",
-        "0.15.2",
-        Some("2025-03-13"),
-        common::RunOnCrateOptions::RunPCG {
-            target: common::Target::Release,
-            validity_checks: true,
-            function: None,
-            extra_env_vars: vec![],
-        },
-    );
+    // common::run_on_crate(
+    //     "tower",
+    //     "0.5.2",
+    //     Some("2025-03-13"),
+    //     common::RunOnCrateOptions::RunPCG {
+    //         target: common::Target::Release,
+    //         validity_checks: true,
+    //         function: None,
+    //         extra_env_vars: vec![],
+    //     },
+    // );
 
     // common::run_on_crate(
     //     "itoa",
@@ -192,17 +192,21 @@ fn test_selected_crates() {
     //     },
     // );
 
-    // common::run_on_crate(
-    //     "cc",
-    //     "1.2.16",
-    //     Some("2025-03-13"),
-    //     common::RunOnCrateOptions::RunPCG {
-    //         target: common::Target::Debug,
-    //         validity_checks: false,
-    //         function: Some("flags::RustcCodegenFlags::<'this>::cc_flags"),
-    //         extra_env_vars: vec![],
-    //     },
-    // );
+    let extra_env_vars = vec![
+        ("PCG_SKIP_FUNCTION".to_string(), "<ir::comp::CompInfo as codegen::CodeGenerator>::codegen".to_string()),
+    ];
+    common::run_on_crate(
+        "cc",
+        "1.2.16",
+        Some("2025-03-13"),
+        common::RunOnCrateOptions::RunPCG {
+            target: common::Target::Debug,
+            validity_checks: false,
+            function: None,
+            // function: Some("flags::RustcCodegenFlags::<'this>::cc_flags"),
+            extra_env_vars,
+        },
+    );
 
     // common::run_on_crate(
     //     "encoding_rs",

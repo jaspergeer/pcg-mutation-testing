@@ -30,7 +30,6 @@ fn compile_results() -> io::Result<()> {
     let path = Path::new(&results_dir);
     if path.is_dir() {
         for entry in std::fs::read_dir(path)? {
-            println!("{:?}", path);
             let entry = entry?;
             let path = entry.path();
             if !path.is_dir() && !(*path.to_string_lossy()).ends_with("-mutants.json") {
