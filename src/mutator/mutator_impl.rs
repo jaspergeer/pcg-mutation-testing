@@ -91,7 +91,7 @@ impl<'a, 'mir, 'tcx> Mutator<'a, 'mir, 'tcx> {
             let old_stmt_idx = self.stmt_idx;
             // Seek until the next basic block for which we have an analysis
             let mut analysis = self.analysis.get_all_for_bb(self.curr_bb()?);
-            while { analysis.is_err() || analysis.unwrap().is_none() } {
+            while analysis.is_err() || analysis.unwrap().is_none() {
                 self.basic_blocks.pop_front();
                 self.stmt_idx = 0;
                 analysis = self.analysis.get_all_for_bb(self.curr_bb()?);
