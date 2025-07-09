@@ -9,7 +9,6 @@ use pcg::PcgOutput;
 
 use std::alloc::System;
 use std::collections::VecDeque;
-use std::iter::Iterator;
 
 #[derive(Serialize, Clone, Debug)]
 pub struct MutantLocation {
@@ -64,14 +63,13 @@ impl<'a, 'mir, 'tcx> Mutator<'a, 'mir, 'tcx> {
         analysis: &'a mut PcgOutput<'mir, 'tcx, System>,
         body: &'a Body<'tcx>,
     ) -> Self {
-        let basic_blocks = body.basic_blocks.indices().collect();
         Self {
             mutation,
             ctx,
             analysis,
             body,
             mutants: VecDeque::new(),
-            basic_blocks,
+            basic_blocks: body.basic_blocks.indices().collect(),
             stmt_idx: 0,
         }
     }
@@ -86,37 +84,33 @@ impl<'a, 'mir, 'tcx> Mutator<'a, 'mir, 'tcx> {
 
     // Return the next `Mutant` that can be generated from this body
     pub fn next(&mut self) -> Option<Mutant<'tcx>> {
-        let mut curr: Option<&PcgLocation<'_>>;
-        let mut next: Option<&PcgLocation<'_>>;
-
         // Seek until we generate some `Mutant`s or finish traversing
         // the body
         while !self.basic_blocks.is_empty() && self.mutants.is_empty() {
             let old_num_bb = self.basic_blocks.len();
             let old_stmt_idx = self.stmt_idx;
             // Seek until the next basic block for which we have an analysis
-            let mut analysis;
-            while {
-                analysis = self.analysis.get_all_for_bb(self.curr_bb()?);
-                analysis.is_err() || analysis.unwrap().is_none()
-            } {
+            let mut analysis = self.analysis.get_all_for_bb(self.curr_bb()?);
+            while { analysis.is_err() || analysis.unwrap().is_none() } {
                 self.basic_blocks.pop_front();
                 self.stmt_idx = 0;
+                analysis = self.analysis.get_all_for_bb(self.curr_bb()?);
             }
             if let Ok(Some(pcg_bb)) = self.analysis.get_all_for_bb(self.curr_bb()?) {
-                curr = pcg_bb.statements.get(self.stmt_idx);
-                self.stmt_idx += 1;
-                next = pcg_bb.statements.get(self.stmt_idx);
-                if let Some(curr) = curr
-                    && let Some(next) = next
+                if let Some(curr) = pcg_bb.statements.get(self.stmt_idx)
+                    && let Some(next) = pcg_bb.statements.get(self.stmt_idx + 1)
                 {
                     self.mutants = self
                         .mutation
                         .generate_mutants(self.ctx, self.body, curr, next)
                         .into();
+                    self.stmt_idx += 1;
                 } else {
                     self.basic_blocks.pop_front();
+                    self.stmt_idx = 0;
                 }
+            } else {
+                unreachable!()
             }
             // Sanity check for termination
             assert!(self.basic_blocks.len() < old_num_bb || self.stmt_idx > old_stmt_idx);
