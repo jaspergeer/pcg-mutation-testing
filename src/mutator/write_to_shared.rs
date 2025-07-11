@@ -29,7 +29,7 @@ impl Mutation for WriteToShared {
         ctx: CompilerCtxt<'mir, 'tcx>,
         body: &Body<'tcx>,
         curr: &PcgLocation<'tcx>,
-        _next: &PcgLocation<'tcx>,
+        next: &PcgLocation<'tcx>,
     ) -> Vec<Mutant<'tcx>> {
         let shared_in_curr = {
             let borrows_graph = curr.states[EvalStmtPhase::PostMain].borrow_pcg().graph();
@@ -39,7 +39,7 @@ impl Mutation for WriteToShared {
         };
 
         let shared_in_next = {
-            let borrows_graph = curr.states[EvalStmtPhase::PostOperands].borrow_pcg().graph();
+            let borrows_graph = next.states[EvalStmtPhase::PostOperands].borrow_pcg().graph();
             borrowed_places(borrows_graph, is_shared)
         };
 

@@ -64,6 +64,7 @@ use pcg_mutation_testing::rustc_interface::ast::Crate;
 use pcg::borrow_checker::r#impl::BorrowCheckerImpl;
 use pcg::pcg::BodyWithBorrowckFacts;
 use pcg::run_pcg;
+use pcg::utils::callbacks::run_pcg_on_fn;
 use pcg::utils::CompilerCtxt;
 use pcg::PcgOutput;
 
@@ -221,7 +222,8 @@ fn run_mutation_tests<'tcx>(
 
                         let (borrowck_result, mutant_body_with_borrowck_facts) = {
                             // Pass this mutant to the borrow checker
-                            let consumer_opts = borrowck::consumers::ConsumerOptions::PoloniusInputFacts;
+                            let consumer_opts =
+                                borrowck::consumers::ConsumerOptions::PoloniusInputFacts;
                             borrowck::do_mir_borrowck(
                                 ctx.tcx(),
                                 &body,
@@ -244,7 +246,6 @@ fn run_mutation_tests<'tcx>(
                         } else {
                             mutator_data.passed += 1;
                             if env_feature_enabled("PCG_VISUALIZATION").unwrap_or(false) {
-
                                 // Because we have forked `rustc_borrowck`, there are two identical
                                 // definitions of `BodyWithBorrowckFacts`. Here we convert from the
                                 // version provided by `rustc_private` to the version defined in our
@@ -275,7 +276,7 @@ fn run_mutation_tests<'tcx>(
                 }));
 
                 if let Err(_) = maybe_panic {
-                   mutator_data.panicked += 1
+                    mutator_data.panicked += 1
                 }
             }
         }
@@ -357,20 +358,54 @@ fn run_mutation_tests<'tcx>(
         }
 
         if env_feature_enabled("MUTANTS_LOG").unwrap_or(false) {
-            let mut mutants_log_file =
-                File::create(&mutants_log_path).expect(&format!("Failed to create output file {mutants_log_path:?}"));
+            let mut mutants_log_file = File::create(&mutants_log_path).expect(&format!(
+                "Failed to create output file {mutants_log_path:?}"
+            ));
             let mutants_log_string = serde_json::to_string_pretty(&mutants_log).unwrap();
             mutants_log_file
                 .write_all(mutants_log_string.as_bytes())
                 .expect("Failed to write results to file");
         }
 
-        let mut mutator_results_file =
-            File::create(&mutator_results_path).expect(&format!("Failed to create output file {mutator_results_path:?}"));
+        let mut mutator_results_file = File::create(&mutator_results_path).expect(&format!(
+            "Failed to create output file {mutator_results_path:?}"
+        ));
         let mutator_results_string = serde_json::to_string_pretty(&mutator_results).unwrap();
         mutator_results_file
             .write_all(mutator_results_string.as_bytes())
             .expect("Failed to write results to file");
+    }
+
+    if env_feature_enabled("PCG_VISUALIZATION").unwrap_or(false) {
+        let user_specified_vis_dir = std::env::var("PCG_VISUALIZATION_DATA_DIR");
+        let vis_dir: &str = match user_specified_vis_dir.as_ref() {
+            Ok(dir) => dir,
+            Err(_) => "visualization/data",
+        };
+
+        let mut item_names = vec![];
+        for (def_id, body) in passed_bodies.iter() {
+            let item_name = tcx.def_path_str(def_id.to_def_id()).to_string();
+            item_names.push(item_name);
+
+            let borrow_checker_impl = BorrowCheckerImpl::new(tcx, body);
+            let ctx: CompilerCtxt<'_, '_> =
+                CompilerCtxt::new(&body.body, tcx, &borrow_checker_impl);
+            run_pcg_on_fn(*def_id, &body, ctx.tcx(), false, Some(vis_dir), None);
+        }
+
+        let file_path = format!("{vis_dir}/functions.json");
+
+        let json_data = serde_json::to_string(
+            &item_names
+                .iter()
+                .map(|name| (name.clone(), name.clone()))
+                .collect::<std::collections::HashMap<_, _>>(),
+        )
+        .expect("Failed to serialize item names to JSON");
+        let mut file = File::create(file_path).expect("Failed to create JSON file");
+        file.write_all(json_data.as_bytes())
+            .expect("Failed to write item names to JSON file");
     }
 }
 
@@ -379,10 +414,10 @@ fn in_cargo_crate() -> bool {
 }
 
 fn init_tracing() {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .with_writer(std::io::stderr)
-        .init();
+    // tracing_subscriber::fmt()
+    //     .with_max_level(tracing::Level::INFO)
+    //     .with_writer(std::io::stderr)
+    //     .init();
 }
 
 fn main() {
@@ -405,16 +440,19 @@ fn main() {
         _ => std::env::current_dir().unwrap(),
     };
 
-    assert!(Path::exists(Path::new(&results_dir)), "Results directory {results_dir:?} does not exist");
+    assert!(
+        Path::exists(Path::new(&results_dir)),
+        "Results directory {results_dir:?} does not exist"
+    );
 
     let mut callbacks = MutatorCallbacks {
         mutations: vec![
-            Box::new(BorrowExpiryOrder),
-            Box::new(AbstractExpiryOrder),
-            Box::new(MutablyLendShared),
-            Box::new(ReadFromWriteOnly),
+            // Box::new(BorrowExpiryOrder),
+            // Box::new(AbstractExpiryOrder),
+            // Box::new(MutablyLendShared),
+            // Box::new(ReadFromWriteOnly),
             Box::new(WriteToShared),
-            Box::new(MoveFromBorrowed),
+            // Box::new(MoveFromBorrowed),
         ],
         results_dir,
     };
