@@ -63,10 +63,10 @@ use pcg_mutation_testing::rustc_interface::ast::Crate;
 
 use pcg::borrow_checker::r#impl::BorrowCheckerImpl;
 use pcg::pcg::BodyWithBorrowckFacts;
-use pcg::run_pcg;
-use pcg::utils::callbacks::run_pcg_on_fn;
 use pcg::utils::CompilerCtxt;
 use pcg::PcgOutput;
+use pcg::PcgCtxt;
+use pcg::run_pcg;
 
 use tracing::info;
 
@@ -322,7 +322,8 @@ fn run_mutation_tests<'tcx>(
                     let borrow_checker_impl = BorrowCheckerImpl::new(tcx, body);
                     let ctx: CompilerCtxt<'_, '_> =
                         CompilerCtxt::new(&body.body, tcx, &borrow_checker_impl);
-                    let analysis = run_pcg(&body.body, ctx.tcx(), ctx.bc(), System, None);
+                    let pcg_ctx = PcgCtxt::new(&body.body, ctx.tcx(), ctx.bc());
+                    let analysis = run_pcg(&pcg_ctx, System, None);
 
                     run_mutation_tests_for_body(
                         ctx,
@@ -375,38 +376,6 @@ fn run_mutation_tests<'tcx>(
             .write_all(mutator_results_string.as_bytes())
             .expect("Failed to write results to file");
     }
-
-    if env_feature_enabled("PCG_VISUALIZATION").unwrap_or(false) {
-        let user_specified_vis_dir = std::env::var("PCG_VISUALIZATION_DATA_DIR");
-        let vis_dir: &str = match user_specified_vis_dir.as_ref() {
-            Ok(dir) => dir,
-            Err(_) => "visualization/data",
-        };
-
-        let mut item_names = vec![];
-        for (def_id, body) in passed_bodies.iter() {
-            let item_name = tcx.def_path_str(def_id.to_def_id()).to_string();
-            item_names.push(item_name);
-
-            let borrow_checker_impl = BorrowCheckerImpl::new(tcx, body);
-            let ctx: CompilerCtxt<'_, '_> =
-                CompilerCtxt::new(&body.body, tcx, &borrow_checker_impl);
-            run_pcg_on_fn(*def_id, &body, ctx.tcx(), false, Some(vis_dir), None);
-        }
-
-        let file_path = format!("{vis_dir}/functions.json");
-
-        let json_data = serde_json::to_string(
-            &item_names
-                .iter()
-                .map(|name| (name.clone(), name.clone()))
-                .collect::<std::collections::HashMap<_, _>>(),
-        )
-        .expect("Failed to serialize item names to JSON");
-        let mut file = File::create(file_path).expect("Failed to create JSON file");
-        file.write_all(json_data.as_bytes())
-            .expect("Failed to write item names to JSON file");
-    }
 }
 
 fn in_cargo_crate() -> bool {
@@ -414,10 +383,10 @@ fn in_cargo_crate() -> bool {
 }
 
 fn init_tracing() {
-    // tracing_subscriber::fmt()
-    //     .with_max_level(tracing::Level::INFO)
-    //     .with_writer(std::io::stderr)
-    //     .init();
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .with_writer(std::io::stderr)
+        .init();
 }
 
 fn main() {
