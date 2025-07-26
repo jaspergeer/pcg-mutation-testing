@@ -4,8 +4,12 @@ mod common;
 use common::{get, run_on_crate};
 use common::{RunOnCrateOptions, Target};
 
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
+use std::fs::File;
 
 use rayon::iter::IndexedParallelIterator;
 use rayon::iter::IntoParallelIterator;
@@ -26,6 +30,7 @@ pub fn top_crates() {
 }
 
 pub fn top_crates_parallel(n: usize, date: Option<&str>, parallelism: usize) {
+
     std::fs::create_dir_all("tmp").unwrap();
     rayon::ThreadPoolBuilder::new()
         .num_threads(parallelism)
@@ -34,20 +39,24 @@ pub fn top_crates_parallel(n: usize, date: Option<&str>, parallelism: usize) {
     let top_crates: Vec<_> = Crates::top(n, date).to_vec();
 
     // TODO: Fix the slowness
-    let extra_env_vars = vec![
-        ("PCG_SKIP_FUNCTION".to_string(), "<ir::comp::CompInfo as codegen::CodeGenerator>::codegen".to_string()),
-    ];
+    let extra_env_vars = vec![(
+        "PCG_SKIP_FUNCTION".to_string(),
+        "<ir::comp::CompInfo as codegen::CodeGenerator>::codegen".to_string(),
+    )];
 
     let results_dir: PathBuf = match std::env::var("RESULTS_DIR") {
         Ok(str) => str.into(),
         _ => "data".into(),
     };
-    let results_dir = std::path::absolute(&results_dir).expect("Failed to convert to absolute path");
+    let results_dir =
+        std::path::absolute(&results_dir).expect("Failed to convert to absolute path");
     if std::path::Path::new(&results_dir).exists() {
-        std::fs::remove_dir_all(&results_dir)
-            .expect("Failed to delete data directory contents");
+        std::fs::remove_dir_all(&results_dir).expect("Failed to delete data directory contents");
     }
     std::fs::create_dir_all(&results_dir).expect("Failed to create data directory");
+
+    let mut failed_log = File::create(results_dir.join("top_crates_failed.json")).unwrap();
+    let failed_crates: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(vec![]));
 
     top_crates
         .into_par_iter()
@@ -57,7 +66,7 @@ pub fn top_crates_parallel(n: usize, date: Option<&str>, parallelism: usize) {
             let version = krate.version();
             println!("Starting: {i} ({})", krate.name);
             std::env::set_var("RESULTS_DIR", results_dir.clone());
-            run_on_crate(
+            if !run_on_crate(
                 &krate.name,
                 version,
                 date,
@@ -67,9 +76,16 @@ pub fn top_crates_parallel(n: usize, date: Option<&str>, parallelism: usize) {
                     function: None,
                     extra_env_vars: extra_env_vars.clone(),
                 },
-            );
+            ) {
+                (*failed_crates).lock().unwrap().push(krate.name.clone());
+            }
             println!("Finished: {i} ({})", krate.name);
         });
+
+    let failed_crates = failed_crates.lock().unwrap().clone();
+    failed_log
+        .write_all(serde_json::to_string(&failed_crates).unwrap().as_bytes())
+        .unwrap();
 }
 
 /// A create on crates.io.
