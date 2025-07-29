@@ -30,46 +30,70 @@ pub struct Mutant<'tcx> {
     pub info: String,
 }
 
+pub struct MutantStream<'a, 'mir: 'a, 'tcx: 'mir> {
+    // ctx: CompilerCtxt<'tcx, 'tcx>,
+    // body: &'tcx Body<'tcx>,
+    // curr: PcgLocation<'tcx>,
+    // next: PcgLocation<'tcx>,
+    iter: Box<dyn MutantIterator<'a, 'mir, 'tcx> + 'a>,
+}
+
+impl<'a, 'mir: 'a, 'tcx: 'mir> MutantStream<'a, 'mir, 'tcx> {
+    pub fn new(iter: Box<dyn MutantIterator<'a, 'mir, 'tcx> + 'a>) -> Self {
+        Self { iter }
+    }
+    pub fn next(&mut self) -> Option<Mutant<'tcx>> {
+        self.iter.next()
+    }
+}
+
+pub trait MutantIterator<'a, 'mir, 'tcx> {
+    fn next(&mut self) -> Option<Mutant<'tcx>>;
+}
+
 // A `Mutation` uses a MIR `Body` and the analyses for two consecutive
 // statements to produce a set of mutant MIR `Body`s.
 pub trait Mutation {
-    fn generate_mutants<'mir, 'tcx>(
+    fn make_stream<'a, 'mir: 'a, 'tcx: 'mir>(
         &self,
-        ctx: CompilerCtxt<'mir, 'tcx>,
-        body: &Body<'tcx>,
-        curr: &PcgLocation<'tcx>,
-        next: &PcgLocation<'tcx>,
-    ) -> Vec<Mutant<'tcx>>;
+        ctx: CompilerCtxt<'a, 'tcx>,
+        body: &'a Body<'tcx>,
+        curr: PcgLocation<'tcx>,
+        next: PcgLocation<'tcx>,
+    ) -> MutantStream<'a, 'mir, 'tcx>;
     fn name(&self) -> String;
 }
 
 // A `Mutator` generates mutants for a MIR `Body` using a `Mutation`.
 // It can be repeatedly queried for new mutants until it has finished traversing
 // the entire `Body`.
-pub struct Mutator<'a, 'mir, 'tcx> {
+pub struct Mutator<'a, 'mir: 'a, 'tcx: 'mir> {
     mutation: &'a Box<dyn Mutation>,
-    ctx: CompilerCtxt<'mir, 'tcx>,
     analysis: &'a mut PcgOutput<'mir, 'tcx, System>,
+    ctx: CompilerCtxt<'a, 'tcx>,
     body: &'a Body<'tcx>,
-    mutants: VecDeque<Mutant<'tcx>>,
+    mutants: Option<MutantStream<'a, 'mir, 'tcx>>,
     basic_blocks: VecDeque<BasicBlock>,
+    bb_stmts: Option<Vec<PcgLocation<'tcx>>>,
     stmt_idx: usize,
+    // borrowck: NllBorrowCheckerImpl<'tcx, 'tcx>,
 }
 
-impl<'a, 'mir, 'tcx> Mutator<'a, 'mir, 'tcx> {
+impl<'a, 'mir: 'a, 'tcx: 'mir> Mutator<'a, 'mir, 'tcx> {
     pub fn new(
         mutation: &'a Box<dyn Mutation>,
-        ctx: CompilerCtxt<'mir, 'tcx>,
+        ctx: CompilerCtxt<'a, 'tcx>,
         analysis: &'a mut PcgOutput<'mir, 'tcx, System>,
         body: &'a Body<'tcx>,
     ) -> Self {
         Self {
             mutation,
-            ctx,
             analysis,
+            ctx,
             body,
-            mutants: VecDeque::new(),
+            mutants: None,
             basic_blocks: body.basic_blocks.indices().collect(),
+            bb_stmts: None,
             stmt_idx: 0,
         }
     }
@@ -86,35 +110,42 @@ impl<'a, 'mir, 'tcx> Mutator<'a, 'mir, 'tcx> {
     pub fn next(&mut self) -> Option<Mutant<'tcx>> {
         // Seek until we generate some `Mutant`s or finish traversing
         // the body
-        while !self.basic_blocks.is_empty() && self.mutants.is_empty() {
+
+        while !self.basic_blocks.is_empty() {
             let old_num_bb = self.basic_blocks.len();
             let old_stmt_idx = self.stmt_idx;
-            // Seek until the next basic block for which we have an analysis
-            let mut analysis = self.analysis.get_all_for_bb(self.curr_bb()?);
-            while analysis.is_err() || analysis.unwrap().is_none() {
-                self.basic_blocks.pop_front();
-                self.stmt_idx = 0;
-                analysis = self.analysis.get_all_for_bb(self.curr_bb()?);
-            }
-            if let Ok(Some(pcg_bb)) = self.analysis.get_all_for_bb(self.curr_bb()?) {
-                if let Some(curr) = pcg_bb.statements.get(self.stmt_idx)
-                    && let Some(next) = pcg_bb.statements.get(self.stmt_idx + 1)
-                {
-                    self.mutants = self
-                        .mutation
-                        .generate_mutants(self.ctx, self.body, curr, next)
-                        .into();
-                    self.stmt_idx += 1;
-                } else {
-                    self.basic_blocks.pop_front();
-                    self.stmt_idx = 0;
-                }
+
+            if let Some(mutants) = &mut self.mutants
+                && let Some(mutant) = mutants.next()
+            {
+                return Some(mutant);
+            } else if let Some(bb_stmts) = &self.bb_stmts
+                && let Some(curr) = bb_stmts.get(self.stmt_idx)
+                && let Some(next) = bb_stmts.get(self.stmt_idx + 1)
+            {
+                self.mutants = Some(self.mutation.make_stream(
+                    self.ctx,
+                    &self.body,
+                    curr.clone(),
+                    next.clone(),
+                ));
+                self.stmt_idx += 1;
             } else {
-                unreachable!()
+                self.stmt_idx = 0;
+                self.bb_stmts = if let Some(curr_bb) = self.curr_bb()
+                    && let Ok(Some(pcg_bb)) = self.analysis.get_all_for_bb(curr_bb)
+                {
+                    Some(pcg_bb.statements)
+                } else {
+                    None
+                };
+                self.basic_blocks.pop_front();
             }
+
             // Sanity check for termination
             assert!(self.basic_blocks.len() < old_num_bb || self.stmt_idx > old_stmt_idx);
         }
-        self.mutants.pop_front()
+
+        None
     }
 }

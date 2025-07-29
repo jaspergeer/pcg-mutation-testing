@@ -61,7 +61,7 @@ use pcg_mutation_testing::rustc_interface::interface::Config;
 
 use pcg_mutation_testing::rustc_interface::ast::Crate;
 
-use pcg::borrow_checker::r#impl::BorrowCheckerImpl;
+use pcg::borrow_checker::r#impl::NllBorrowCheckerImpl;
 use pcg::pcg::BodyWithBorrowckFacts;
 use pcg::utils::CompilerCtxt;
 use pcg::PcgOutput;
@@ -176,15 +176,15 @@ fn run_mutation_tests<'tcx>(
     }
 
     // Run every `Mutation` on a given MIR body
-    fn run_mutation_tests_for_body<'mir, 'tcx>(
-        ctx: CompilerCtxt<'mir, 'tcx>,
-        compiler: &Compiler,
-        mutations: &mut Vec<Box<dyn Mutation + Send>>,
-        mutants_log: &mut IndexMap<String, LogEntry>,
-        mutator_results: &mut HashMap<String, MutatorData>,
-        passed_bodies: &mut HashMap<LocalDefId, BodyWithBorrowckFacts<'tcx>>,
+    fn run_mutation_tests_for_body<'a, 'mir: 'a, 'tcx: 'mir>(
+        tcx: TyCtxt<'tcx>,
+        compiler: &'a Compiler,
+        mutations: &'a mut Vec<Box<dyn Mutation + Send>>,
+        mutants_log: &'a mut IndexMap<String, LogEntry>,
+        mutator_results: &'a mut HashMap<String, MutatorData>,
+        passed_bodies: &'a mut HashMap<LocalDefId, BodyWithBorrowckFacts<'tcx>>,
         def_id: LocalDefId,
-        body_with_borrowck_facts: &'mir BodyWithBorrowckFacts<'tcx>,
+        body_with_borrowck_facts: &'a BodyWithBorrowckFacts<'tcx>,
         mut analysis: PcgOutput<'mir, 'tcx, System>,
     ) {
         for mutation in mutations.iter_mut() {
@@ -197,12 +197,17 @@ fn run_mutation_tests<'tcx>(
                     panicked: 0,
                     error_codes: HashSet::new(),
                 });
-            let body = &body_with_borrowck_facts.body;
+            // let body = &body_with_borrowck_facts.body;
             let promoted = &body_with_borrowck_facts.promoted;
 
             // Weaken `dyn Mutation + Send` to `dyn Mutation`
             let mutation: &Box<dyn Mutation> = unsafe { std::mem::transmute(&*mutation) };
-            let mut mutator = Mutator::new(mutation, ctx, &mut analysis, body);
+            let borrow_checker_impl: &'tcx NllBorrowCheckerImpl<'_, 'tcx> = unsafe { std::mem::transmute(&NllBorrowCheckerImpl::new(tcx, body_with_borrowck_facts)) };
+            let body_ref = &body_with_borrowck_facts.body;
+
+            let ctx: CompilerCtxt<'_, '_> =
+                CompilerCtxt::new(body_ref, tcx, borrow_checker_impl);
+            let mut mutator = Mutator::new(mutation, ctx, &mut analysis, ctx.body());
 
             while let Some(Mutant { body, range, info }) = mutator.next() {
                 info!(
@@ -225,7 +230,7 @@ fn run_mutation_tests<'tcx>(
                             let consumer_opts =
                                 borrowck::consumers::ConsumerOptions::PoloniusInputFacts;
                             borrowck::do_mir_borrowck(
-                                ctx.tcx(),
+                                tcx,
                                 &body,
                                 &promoted,
                                 Some(consumer_opts),
@@ -286,7 +291,7 @@ fn run_mutation_tests<'tcx>(
     let mut mutants_log: IndexMap<String, LogEntry> = IndexMap::new();
     let mut passed_bodies: HashMap<LocalDefId, BodyWithBorrowckFacts<'tcx>> = HashMap::new();
 
-    let body_map: HashMap<LocalDefId, BodyWithBorrowckFacts<'tcx>> =
+    let mut body_map: HashMap<LocalDefId, BodyWithBorrowckFacts<'tcx>> =
         unsafe { std::mem::transmute(BODIES.take()) };
 
     initialize_error_tracking();
@@ -305,7 +310,7 @@ fn run_mutation_tests<'tcx>(
         let item_name = tcx.def_path_str(def_id.to_def_id()).to_string();
         match kind {
             hir::def::DefKind::Fn | hir::def::DefKind::AssocFn => {
-                if let Some(body) = body_map.get(&def_id) {
+                if let Some(body) = body_map.remove(&def_id) {
                     info!(
                         "{}Running mutation testing on function: {}",
                         cargo_crate_name().map_or("".to_string(), |name| format!("{name}: ")),
@@ -319,21 +324,21 @@ fn run_mutation_tests<'tcx>(
                     }
                     std::env::set_var("PCG_VALIDITY_CHECKS", "false");
 
-                    let borrow_checker_impl = BorrowCheckerImpl::new(tcx, body);
+                    let borrow_checker_impl = NllBorrowCheckerImpl::new(tcx, &body);
                     let ctx: CompilerCtxt<'_, '_> =
                         CompilerCtxt::new(&body.body, tcx, &borrow_checker_impl);
                     let pcg_ctx = PcgCtxt::new(&body.body, ctx.tcx(), ctx.bc());
                     let analysis = run_pcg(&pcg_ctx, System, None);
 
                     run_mutation_tests_for_body(
-                        ctx,
+                        tcx,
                         compiler,
                         mutations,
                         &mut mutants_log,
                         &mut mutator_results,
                         &mut passed_bodies,
                         def_id,
-                        body,
+                        &body,
                         analysis,
                     );
                 }
