@@ -446,10 +446,10 @@ fn main() {
         mutations: vec![
             Box::new(BorrowExpiryOrder),
             Box::new(AbstractExpiryOrder),
-            // Box::new(MutablyLendShared),
-            // Box::new(ReadFromWriteOnly),
-            // Box::new(WriteToShared),
-            // Box::new(MoveFromBorrowed),
+            Box::new(MutablyLendShared),
+            Box::new(ReadFromWriteOnly),
+            Box::new(WriteToShared),
+            Box::new(MoveFromBorrowed),
         ],
         results_dir,
     };
