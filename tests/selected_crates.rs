@@ -6,8 +6,8 @@ fn test_selected_crates() {
     std::fs::create_dir_all("tmp").unwrap();
 
     common::run_on_crate(
-        "tokio",
-        "1.44.1",
+        "futures-macro",
+        "0.3.31",
         Some("2025-03-13"),
         common::RunOnCrateOptions::RunPCG {
             target: common::Target::Release,

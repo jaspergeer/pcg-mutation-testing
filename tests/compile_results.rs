@@ -49,6 +49,7 @@ fn compile_results() -> io::Result<()> {
                         entry.instances += result.instances;
                         entry.passed += result.passed;
                         entry.failed += result.failed;
+                        entry.panicked += result.panicked;
                         entry.error_codes.extend(result.error_codes);
                     }
                 }
