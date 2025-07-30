@@ -32,8 +32,7 @@ pub(crate) fn local_node_to_current_place<'tcx>(pcg_node: LocalNode<'tcx>) -> Op
     match pcg_node {
         PCGNode::Place(maybe_old_place) =>
             maybe_old_place_to_current_place(maybe_old_place),
-        PCGNode::RegionProjection(region_projection) =>
-            maybe_old_place_to_current_place(region_projection.base()),
+        _ => None,
     }
 }
 
