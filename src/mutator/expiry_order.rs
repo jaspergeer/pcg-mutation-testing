@@ -17,6 +17,7 @@ use super::mutator_impl::Mutation;
 
 use crate::rustc_interface::middle::mir::Body;
 use crate::rustc_interface::middle::mir::BorrowKind;
+use crate::rustc_interface::middle::mir::Mutability;
 use crate::rustc_interface::middle::mir::Place as MirPlace;
 use crate::rustc_interface::middle::mir::PlaceRef;
 use crate::rustc_interface::middle::mir::Rvalue;
@@ -32,6 +33,7 @@ use crate::rustc_interface::middle::ty::TyCtxt;
 use pcg::free_pcs::PcgLocation;
 
 use pcg::pcg::EvalStmtPhase;
+use pcg::pcg::PCGNode;
 
 use pcg::utils::place::Place;
 use pcg::utils::CompilerCtxt;
@@ -50,8 +52,8 @@ fn places_blocking<'mir, 'tcx>(
     place: Place<'tcx>,
     borrows_graph: &BorrowsGraph<'tcx>,
     ctx: CompilerCtxt<'mir, 'tcx>,
-    is_blocking_edge: impl Fn(&HashSet<BorrowPcgEdgeKind>) -> bool,
-    is_valid_edge: impl Fn(&BorrowPcgEdgeKind) -> bool,
+    is_blocking_edge: impl Fn(&HashSet<BorrowPcgEdgeKind<'tcx>>) -> bool,
+    is_valid_edge: impl Fn(&BorrowPcgEdgeKind<'tcx>) -> bool,
 ) -> HashSet<Place<'tcx>> {
     let node = place.into();
     let mut to_visit: Vec<(BorrowPcgEdgeRef<'_, '_>, HashSet<BorrowPcgEdgeKind<'_>>)> =
@@ -250,6 +252,19 @@ impl Mutation for BorrowExpiryOrder {
                         BorrowPcgEdgeKind::Borrow(borrow_edge) => {
                             borrow_edge.kind().iter().any(|kind| is_mut(*kind))
                         }
+                        BorrowPcgEdgeKind::BorrowPcgExpansion(expansion) => {
+                            let ctx = ctx;
+                            let base = expansion.base();
+                            match base {
+                                PCGNode::Place(p) => {
+                                    p.ty(ctx).ty.ref_mutability() == Some(Mutability::Mut)
+                                }
+                                PCGNode::RegionProjection(rp) => {
+                                    rp.place().ty(ctx).ty.ref_mutability()
+                                        == Some(Mutability::Mut)
+                                }
+                            }
+                        }
                         _ => true,
                     },
                 );
@@ -318,6 +333,19 @@ impl Mutation for AbstractExpiryOrder {
                     |kind| match kind {
                         BorrowPcgEdgeKind::Borrow(borrow_edge) => {
                             borrow_edge.kind().iter().any(|kind| is_mut(*kind))
+                        }
+                        BorrowPcgEdgeKind::BorrowPcgExpansion(expansion) => {
+                            let ctx = ctx;
+                            let base = expansion.base();
+                            match base {
+                                PCGNode::Place(p) => {
+                                    p.ty(ctx).ty.ref_mutability() == Some(Mutability::Mut)
+                                }
+                                PCGNode::RegionProjection(rp) => {
+                                    rp.place().ty(ctx).ty.ref_mutability()
+                                        == Some(Mutability::Mut)
+                                }
+                            }
                         }
                         _ => true,
                     },

@@ -63,10 +63,10 @@ use pcg_mutation_testing::rustc_interface::ast::Crate;
 
 use pcg::borrow_checker::r#impl::NllBorrowCheckerImpl;
 use pcg::pcg::BodyWithBorrowckFacts;
-use pcg::utils::CompilerCtxt;
-use pcg::PcgOutput;
-use pcg::PcgCtxt;
 use pcg::run_pcg;
+use pcg::utils::CompilerCtxt;
+use pcg::PcgCtxt;
+use pcg::PcgOutput;
 
 use tracing::info;
 
@@ -202,11 +202,12 @@ fn run_mutation_tests<'tcx>(
 
             // Weaken `dyn Mutation + Send` to `dyn Mutation`
             let mutation: &Box<dyn Mutation> = unsafe { std::mem::transmute(&*mutation) };
-            let borrow_checker_impl: &'tcx NllBorrowCheckerImpl<'_, 'tcx> = unsafe { std::mem::transmute(&NllBorrowCheckerImpl::new(tcx, body_with_borrowck_facts)) };
+            let borrow_checker_impl: &'tcx NllBorrowCheckerImpl<'_, 'tcx> = unsafe {
+                std::mem::transmute(&NllBorrowCheckerImpl::new(tcx, body_with_borrowck_facts))
+            };
             let body_ref = &body_with_borrowck_facts.body;
 
-            let ctx: CompilerCtxt<'_, '_> =
-                CompilerCtxt::new(body_ref, tcx, borrow_checker_impl);
+            let ctx: CompilerCtxt<'_, '_> = CompilerCtxt::new(body_ref, tcx, borrow_checker_impl);
             let mut mutator = Mutator::new(mutation, ctx, &mut analysis, ctx.body());
 
             while let Some(Mutant { body, range, info }) = mutator.next() {
@@ -229,12 +230,7 @@ fn run_mutation_tests<'tcx>(
                             // Pass this mutant to the borrow checker
                             let consumer_opts =
                                 borrowck::consumers::ConsumerOptions::PoloniusInputFacts;
-                            borrowck::do_mir_borrowck(
-                                tcx,
-                                &body,
-                                &promoted,
-                                Some(consumer_opts),
-                            )
+                            borrowck::do_mir_borrowck(tcx, &body, &promoted, Some(consumer_opts))
                         };
                         if let Some(_) = borrowck_result.tainted_by_errors {
                             mutator_data.failed += 1;
@@ -347,6 +343,33 @@ fn run_mutation_tests<'tcx>(
         }
     }
 
+    if let Ok(vis_dir) = std::env::var("PCG_VISUALIZATION_DATA_DIR") {
+        let mut item_names = vec![];
+        for (def_id, body) in passed_bodies.drain() {
+            let borrow_checker_impl = NllBorrowCheckerImpl::new(tcx, &body);
+            let ctx: CompilerCtxt<'_, '_> =
+                CompilerCtxt::new(&body.body, tcx, &borrow_checker_impl);
+            let pcg_ctx = PcgCtxt::new(&body.body, ctx.tcx(), ctx.bc());
+            let item_name = ctx.tcx().def_path_str(def_id.to_def_id()).to_string();
+            let item_dir = format!("{vis_dir}/{item_name}");
+            item_names.push(item_name);
+            run_pcg(&pcg_ctx, System, Some(item_dir.as_ref()));
+        }
+
+        let file_path = format!("{vis_dir}/functions.json");
+
+        let json_data = serde_json::to_string(
+            &item_names
+                .iter()
+                .map(|name| (name.clone(), name.clone()))
+                .collect::<std::collections::HashMap<_, _>>(),
+        )
+        .expect("Failed to serialize item names to JSON");
+        let mut file = File::create(file_path).expect("Failed to create JSON file");
+        file.write_all(json_data.as_bytes())
+            .expect("Failed to write item names to JSON file");
+    }
+
     if let Some(crate_name) = cargo_crate_name() {
         let mut crate_name_suffix = 0;
         let mut mutants_log_path = results_dir
@@ -423,10 +446,10 @@ fn main() {
         mutations: vec![
             Box::new(BorrowExpiryOrder),
             Box::new(AbstractExpiryOrder),
-            Box::new(MutablyLendShared),
-            Box::new(ReadFromWriteOnly),
-            Box::new(WriteToShared),
-            Box::new(MoveFromBorrowed),
+            // Box::new(MutablyLendShared),
+            // Box::new(ReadFromWriteOnly),
+            // Box::new(WriteToShared),
+            // Box::new(MoveFromBorrowed),
         ],
         results_dir,
     };
